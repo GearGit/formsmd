@@ -1,0 +1,4549 @@
+diff --git a/bin/index.js b/bin/index.js
+index 012e1f9..0f43bc1 100755
+--- a/bin/index.js
++++ b/bin/index.js
+@@ -8,6 +8,40 @@ const { cwd } = require("node:process");
+ var nunjucks = require("nunjucks");
+ const path = require("path");
+ var slugify = require("slugify");
++const fetch = (...args) =>
++	import("node-fetch").then(({ default: fetch }) => fetch(...args));
++
++/**
++ * Fetch survey data from API
++ * @param {string} surveyId - The survey ID
++ * @param {string} apiBaseUrl - The API base URL
++ * @returns {Promise<Object>} Survey data
++ */
++async function fetchSurveyData(surveyId, apiBaseUrl) {
++	try {
++		const fetchModule = await import("node-fetch");
++
++		// Fetch basic survey data (no theme handling in build process)
++		const url = `${apiBaseUrl}/api/public/surveys/${surveyId}`;
++
++		const response = await fetchModule.default(url);
++
++		if (!response.ok) {
++			throw new Error(`HTTP error! status: ${response.status}`);
++		}
++
++		const result = await response.json();
++
++		if (result.success && result.data) {
++			return result.data;
++		}
++
++		throw new Error("Invalid survey API response format");
++	} catch (error) {
++		console.error("❌ Error fetching survey data:", error);
++		throw error;
++	}
++}
+ 
+ // Set up the command line arguments
+ const argv = require("yargs/yargs")(process.argv.slice(2)).options({
+@@ -32,6 +66,17 @@ const argv = require("yargs/yargs")(process.argv.slice(2)).options({
+ 		describe: "Static directory name (for images, media files, etc.)",
+ 		type: "string",
+ 	},
++	"survey-id": {
++		alias: "sid",
++		describe: "Survey ID for API-driven rendering",
++		type: "string",
++	},
++	"api-base-url": {
++		alias: "api",
++		default: "http://localhost:3001",
++		describe: "API base URL",
++		type: "string",
++	},
+ }).argv;
+ 
+ // Set up the directories
+@@ -55,66 +100,137 @@ const baseFile = fs.existsSync(`${inputDir}/base.html`)
+ 	: path.join(__dirname, "base.html");
+ const base = fs.readFileSync(baseFile).toString();
+ 
+-// Read the input directory
+-fs.readdir(inputDir, function (err, files) {
+-	// Handle error
+-	if (err) {
+-		return console.error("Unable to read input directory: " + err);
+-	}
++// Main processing function
++async function processFiles() {
++	try {
++		// Check if we're using API-driven rendering
++		if (argv["survey-id"]) {
++			// Fetch survey data from API
++			const surveyData = await fetchSurveyData(
++				argv["survey-id"],
++				argv["api-base-url"],
++			);
+ 
+-	// Go through each file to find Markdown ones
+-	files.forEach(function (file) {
+-		if (file.endsWith(".md")) {
+-			try {
+-				// The route is the slugified file name (with extension)
+-				const route = slugify(file.substring(0, file.length - 3), {
+-					lower: true,
+-					strict: true,
+-				});
+-				let template = fs.readFileSync(`${inputDir}/${file}`).toString();
+-
+-				// Parse settings
+-				const parsedTemplateAndSettings = parseSettings(template);
+-				const settings = {
+-					...getDefaultSettings(),
+-					...parsedTemplateAndSettings.settings,
+-				};
+-
+-				// Use Nunjucks to create the HTML
+-				const htmlContent = nunjucks.renderString(base, {
+-					route: route,
+-					settings: settings,
++			// Convert survey data to FormsMD settings format (basic only)
++			const settings = {
++				...getDefaultSettings(),
++				"id": surveyData.surveyId,
++				"title": surveyData.title || "Survey",
++				"meta-description": surveyData.description || "",
++				"page": "form-slides",
++				"slide-delimiter": "---",
++				"submit-button-text": "OK",
++				"restart-button": "hide",
++				"localization": "en",
++				"dir": "ltr",
++			};
++
++			// Create route name from survey ID
++			const route = slugify(argv["survey-id"], {
++				lower: true,
++				strict: true,
++			});
++
++			// Use Nunjucks to create the HTML with survey settings
++			const htmlContent = nunjucks.renderString(base, {
++				route: route,
++				settings: settings,
++			});
++
++			// Create API-driven template (no markdown needed)
++			const apiTemplate = `
++// API-driven survey template
++// Survey ID: ${argv["survey-id"]}
++// API Base URL: ${argv["api-base-url"]}
++
++const instance = new Formsmd("", document, { isFullPage: true });
++instance.initWithConfig({
++	surveyId: "${argv["survey-id"]}",
++	apiBaseUrl: "${argv["api-base-url"]}",
++	isApiDriven: true
++});
++			`.trim();
++
++			// Create the files in the output directory
++			fs.writeFileSync(`${outputDir}/${route}.html`, htmlContent);
++			fs.writeFileSync(`${outputDir}/content/${route}.md.js`, apiTemplate);
++		} else {
++			// Traditional markdown-based rendering
++
++			// Read the input directory
++			fs.readdir(inputDir, function (err, files) {
++				// Handle error
++				if (err) {
++					return console.error("Unable to read input directory: " + err);
++				}
++
++				// Go through each file to find Markdown ones
++				files.forEach(function (file) {
++					if (file.endsWith(".md")) {
++						try {
++							// The route is the slugified file name (with extension)
++							const route = slugify(file.substring(0, file.length - 3), {
++								lower: true,
++								strict: true,
++							});
++							let template = fs.readFileSync(`${inputDir}/${file}`).toString();
++
++							// Parse settings
++							const parsedTemplateAndSettings = parseSettings(template);
++							const settings = {
++								...getDefaultSettings(),
++								...parsedTemplateAndSettings.settings,
++							};
++
++							// Use Nunjucks to create the HTML
++							const htmlContent = nunjucks.renderString(base, {
++								route: route,
++								settings: settings,
++							});
++
++							// Escape all backticks from template and prepare it for the output
++							template = template.replace(/`/g, "\\`");
++							template = ["`", template, "`.formsmd();"].join("\n");
++
++							// Create the files in the output directory
++							fs.writeFileSync(`${outputDir}/${route}.html`, htmlContent);
++							fs.writeFileSync(`${outputDir}/content/${route}.md.js`, template);
++						} catch (err) {
++							console.error(err);
++						}
++					}
+ 				});
++			});
++		}
++	} catch (error) {
++		console.error("❌ Error processing files:", error);
++		process.exit(1);
++	}
++}
+ 
+-				// Escape all backticks from template and prepare it for the output
+-				template = template.replace(/`/g, "\\`");
+-				template = ["`", template, "`.formsmd();"].join("\n");
++// Execute the main processing function
++processFiles()
++	.then(() => {
++		// Copy the Forms.md CSS and JS files
++		try {
++			fs.copySync(path.join(__dirname, "..", "dist"), `${outputDir}/formsmd`);
++		} catch (err) {
++			console.error(err);
++		}
+ 
+-				// Create the files in the output directory
+-				fs.writeFileSync(`${outputDir}/${route}.html`, htmlContent);
+-				fs.writeFileSync(`${outputDir}/content/${route}.md.js`, template);
++		// Copy the static directory if one exists
++		if (fs.existsSync(`${inputDir}/${staticDirName}`)) {
++			try {
++				fs.copySync(
++					`${inputDir}/${staticDirName}`,
++					`${outputDir}/${staticDirName}`,
++				);
+ 			} catch (err) {
+ 				console.error(err);
+ 			}
+ 		}
++	})
++	.catch((error) => {
++		console.error("❌ Build failed:", error);
++		process.exit(1);
+ 	});
+-});
+-
+-// Copy the Forms.md CSS and JS files
+-try {
+-	fs.copySync(path.join(__dirname, "..", "dist"), `${outputDir}/formsmd`);
+-} catch (err) {
+-	console.error(err);
+-}
+-
+-// Copy the static directory if one exists
+-if (fs.existsSync(`${inputDir}/${staticDirName}`)) {
+-	try {
+-		fs.copySync(
+-			`${inputDir}/${staticDirName}`,
+-			`${outputDir}/${staticDirName}`,
+-		);
+-	} catch (err) {
+-		console.error(err);
+-	}
+-}
+diff --git a/package-lock.json b/package-lock.json
+index b601092..59497c9 100644
+--- a/package-lock.json
++++ b/package-lock.json
+@@ -12,7 +12,9 @@
+ 				"dompurify": "^3.2.4",
+ 				"highlight.js": "^11.9.0",
+ 				"marked": "^12.0.1",
++				"node-fetch": "^3.3.2",
+ 				"nunjucks": "^3.2.4",
++				"slugify": "^1.6.6",
+ 				"yargs": "^17.7.2"
+ 			},
+ 			"bin": {
+@@ -4199,6 +4201,15 @@
+ 			"integrity": "sha512-b0tGHbfegbhPJpxpiBPU2sCkigAqtM9O121le6bbOlgyV+NyGyCmVfJ6QW9eRjz8CpNfWEOYBIMIGRYkLwsIYg==",
+ 			"dev": true
+ 		},
++		"node_modules/data-uri-to-buffer": {
++			"version": "4.0.1",
++			"resolved": "https://registry.npmjs.org/data-uri-to-buffer/-/data-uri-to-buffer-4.0.1.tgz",
++			"integrity": "sha512-0R9ikRb668HB7QDxT1vkpuUBtqc53YyAwMwGeUFKRojY/NWKvdZ+9UYtRfGmhqNbRkTSVpMbmyhXipFFv2cb/A==",
++			"license": "MIT",
++			"engines": {
++				"node": ">= 12"
++			}
++		},
+ 		"node_modules/data-urls": {
+ 			"version": "3.0.2",
+ 			"resolved": "https://registry.npmjs.org/data-urls/-/data-urls-3.0.2.tgz",
+@@ -4920,6 +4931,29 @@
+ 				"bser": "2.1.1"
+ 			}
+ 		},
++		"node_modules/fetch-blob": {
++			"version": "3.2.0",
++			"resolved": "https://registry.npmjs.org/fetch-blob/-/fetch-blob-3.2.0.tgz",
++			"integrity": "sha512-7yAQpD2UMJzLi1Dqv7qFYnPbaPx7ZfFK6PiIxQ4PfkGPyNyl2Ugx+a/umUonmKqjhM4DnfbMvdX6otXq83soQQ==",
++			"funding": [
++				{
++					"type": "github",
++					"url": "https://github.com/sponsors/jimmywarting"
++				},
++				{
++					"type": "paypal",
++					"url": "https://paypal.me/jimmywarting"
++				}
++			],
++			"license": "MIT",
++			"dependencies": {
++				"node-domexception": "^1.0.0",
++				"web-streams-polyfill": "^3.0.3"
++			},
++			"engines": {
++				"node": "^12.20 || >= 14.13"
++			}
++		},
+ 		"node_modules/file-entry-cache": {
+ 			"version": "8.0.0",
+ 			"resolved": "https://registry.npmjs.org/file-entry-cache/-/file-entry-cache-8.0.0.tgz",
+@@ -5027,6 +5061,18 @@
+ 				"node": ">= 6"
+ 			}
+ 		},
++		"node_modules/formdata-polyfill": {
++			"version": "4.0.10",
++			"resolved": "https://registry.npmjs.org/formdata-polyfill/-/formdata-polyfill-4.0.10.tgz",
++			"integrity": "sha512-buewHzMvYL29jdeQTVILecSaZKnt/RJWjoZCF5OW60Z67/GmSLBkOFM7qh1PI3zFNtJbaZL5eQu1vLfazOwj4g==",
++			"license": "MIT",
++			"dependencies": {
++				"fetch-blob": "^3.1.2"
++			},
++			"engines": {
++				"node": ">=12.20.0"
++			}
++		},
+ 		"node_modules/fs-extra": {
+ 			"version": "11.2.0",
+ 			"resolved": "https://registry.npmjs.org/fs-extra/-/fs-extra-11.2.0.tgz",
+@@ -7646,6 +7692,44 @@
+ 			"integrity": "sha512-Yd3UES5mWCSqR+qNT93S3UoYUkqAZ9lLg8a7g9rimsWmYGK8cVToA4/sF3RrshdyV3sAGMXVUmpMYOw+dLpOuw==",
+ 			"dev": true
+ 		},
++		"node_modules/node-domexception": {
++			"version": "1.0.0",
++			"resolved": "https://registry.npmjs.org/node-domexception/-/node-domexception-1.0.0.tgz",
++			"integrity": "sha512-/jKZoMpw0F8GRwl4/eLROPA3cfcXtLApP0QzLmUT/HuPCZWyB7IY9ZrMeKw2O/nFIqPQB3PVM9aYm0F312AXDQ==",
++			"deprecated": "Use your platform's native DOMException instead",
++			"funding": [
++				{
++					"type": "github",
++					"url": "https://github.com/sponsors/jimmywarting"
++				},
++				{
++					"type": "github",
++					"url": "https://paypal.me/jimmywarting"
++				}
++			],
++			"license": "MIT",
++			"engines": {
++				"node": ">=10.5.0"
++			}
++		},
++		"node_modules/node-fetch": {
++			"version": "3.3.2",
++			"resolved": "https://registry.npmjs.org/node-fetch/-/node-fetch-3.3.2.tgz",
++			"integrity": "sha512-dRB78srN/l6gqWulah9SrxeYnxeddIG30+GOqK/9OlLVyLg3HPnr6SqOWTWOXKRwC2eGYCkZ59NNuSgvSrpgOA==",
++			"license": "MIT",
++			"dependencies": {
++				"data-uri-to-buffer": "^4.0.0",
++				"fetch-blob": "^3.1.4",
++				"formdata-polyfill": "^4.0.10"
++			},
++			"engines": {
++				"node": "^12.20.0 || ^14.13.1 || >=16.0.0"
++			},
++			"funding": {
++				"type": "opencollective",
++				"url": "https://opencollective.com/node-fetch"
++			}
++		},
+ 		"node_modules/node-int64": {
+ 			"version": "0.4.0",
+ 			"resolved": "https://registry.npmjs.org/node-int64/-/node-int64-0.4.0.tgz",
+@@ -8436,6 +8520,15 @@
+ 				"node": ">=8"
+ 			}
+ 		},
++		"node_modules/slugify": {
++			"version": "1.6.6",
++			"resolved": "https://registry.npmjs.org/slugify/-/slugify-1.6.6.tgz",
++			"integrity": "sha512-h+z7HKHYXj6wJU+AnS/+IH8Uh9fdcX1Lrhg1/VMdf9PwoBQXFcXiAdsy2tSK0P6gKwJLXp02r90ahUCqHk9rrw==",
++			"license": "MIT",
++			"engines": {
++				"node": ">=8.0.0"
++			}
++		},
+ 		"node_modules/source-map": {
+ 			"version": "0.6.1",
+ 			"resolved": "https://registry.npmjs.org/source-map/-/source-map-0.6.1.tgz",
+@@ -9012,6 +9105,15 @@
+ 				"node": ">=10.13.0"
+ 			}
+ 		},
++		"node_modules/web-streams-polyfill": {
++			"version": "3.3.3",
++			"resolved": "https://registry.npmjs.org/web-streams-polyfill/-/web-streams-polyfill-3.3.3.tgz",
++			"integrity": "sha512-d2JWLCivmZYTSIoge9MsgFCZrt571BikcWGYkjC1khllbTeDlGqZ2D8vD8E/lJa8WGWbb7Plm8/XJYV7IJHZZw==",
++			"license": "MIT",
++			"engines": {
++				"node": ">= 8"
++			}
++		},
+ 		"node_modules/webidl-conversions": {
+ 			"version": "7.0.0",
+ 			"resolved": "https://registry.npmjs.org/webidl-conversions/-/webidl-conversions-7.0.0.tgz",
+@@ -9369,6 +9471,7 @@
+ 			"version": "17.7.2",
+ 			"resolved": "https://registry.npmjs.org/yargs/-/yargs-17.7.2.tgz",
+ 			"integrity": "sha512-7dSzzRQ++CKnNI/krKnYRV7JKKPUXMEh61soaHKg9mrWEhzFWhFnxPxGl+69cD1Ou63C13NUPCnmIcrvqCuM6w==",
++			"license": "MIT",
+ 			"dependencies": {
+ 				"cliui": "^8.0.1",
+ 				"escalade": "^3.1.1",
+diff --git a/package.json b/package.json
+index ca49b77..a6671a9 100644
+--- a/package.json
++++ b/package.json
+@@ -55,7 +55,9 @@
+ 		"dompurify": "^3.2.4",
+ 		"highlight.js": "^11.9.0",
+ 		"marked": "^12.0.1",
++		"node-fetch": "^3.3.2",
+ 		"nunjucks": "^3.2.4",
++		"slugify": "^1.6.6",
+ 		"yargs": "^17.7.2"
+ 	},
+ 	"prettier": {
+diff --git a/src/end-slide-template.js b/src/end-slide-template.js
+new file mode 100644
+index 0000000..eb55b77
+--- /dev/null
++++ b/src/end-slide-template.js
+@@ -0,0 +1,115 @@
++"use strict";
++
++const { getTranslation } = require("./translations");
++var nunjucks = require("nunjucks");
++
++/**
++ * End slide template with alignment options
++ * Supports left, center (default), and right alignment
++ * CTA button is optional and can be replaced with redirect functionality
++ */
++const endSlideTemplate = `
++<div
++	class="fmd-slide fmd-end-slide"
++	data-fmd-page-progress="100%"
++>
++	<div class="fmd-grid" style="text-align: {{ alignment }};">
++		<div class="fmd-end-content">
++			{% if title %}
++			<h1 class="fmd-end-title fmd-form-question">
++				{{ title | safe }}
++			</h1>
++			{% endif %}
++			
++			{% if content %}
++			<div class="fmd-end-description fmd-form-description">
++				{{ content | safe }}
++			</div>
++			{% endif %}
++		</div>
++		
++		{% if buttonText and not redirectUrl %}
++		<div class="fmd-end-controls fmd-d-flex" style="justify-content: {% if alignment == 'left' %}flex-start{% elif alignment == 'right' %}flex-end{% else %}center{% endif %};">
++			<button type="button" class="fmd-end-btn fmd-btn fmd-btn-accent fmd-d-flex fmd-align-items-center fmd-justify-content-center">
++				{{ buttonText }}
++				<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512" class="fmd-icon fmd-ms-2 fmd-hide-rtl" aria-hidden="true" focusable="false"><path d="M273 239c9.4 9.4 9.4 24.6 0 33.9L113 433c9.4 9.4-24.6 9.4-33.9 0s-9.4-24.6 0-33.9l143-143L79 113c9.4-9.4-9.4-24.6 0-33.9s24.6-9.4 33.9 0L273 239z"/></svg>
++				<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512" class="fmd-icon fmd-ms-2 fmd-hide-ltr" aria-hidden="true" focusable="false"><path d="M47 239c9.4 9.4 9.4 24.6 0 33.9L207 433c9.4 9.4 24.6 9.4 33.9 0s9.4-24.6 0-33.9L97.9 256 241 113c9.4-9.4 9.4-24.6 0-33.9s-24.6-9.4-33.9 0L47 239z"/></svg>
++			</button>
++		</div>
++		{% endif %}
++		
++		{% if redirectUrl %}
++		<div class="fmd-end-redirect fmd-d-flex" style="justify-content: {% if alignment == 'left' %}flex-start{% elif alignment == 'right' %}flex-end{% else %}center{% endif %};">
++			<div class="fmd-end-redirect-message">
++				{{ redirectMessage | safe }}
++			</div>
++		</div>
++		{% endif %}
++	</div>
++</div>
++`;
++
++/**
++ * Create an end slide
++ *
++ * @param {Object} config - End slide configuration
++ * @param {string} config.title - End slide title
++ * @param {string} config.content - End slide content/description
++ * @param {string} config.buttonText - CTA button text (optional if redirectUrl is provided)
++ * @param {string} config.alignment - Text alignment: "left", "center", or "right" (default: "center")
++ * @param {string} config.redirectUrl - Optional redirect URL (if provided, button is hidden)
++ * @param {number} config.redirectDelay - Redirect delay in milliseconds (default: 3000)
++ * @param {string} localization - Localization setting
++ * @returns {string} End slide HTML
++ */
++function createEndSlide(config, localization) {
++	// Set default alignment to center if not specified
++	let alignment = config.alignment || "center";
++
++	// Validate alignment value
++	const validAlignments = ["left", "center", "right"];
++	if (!validAlignments.includes(alignment)) {
++		console.warn(
++			`[END-SLIDE] Invalid alignment "${alignment}". Using "center" instead.`,
++		);
++		alignment = "center";
++	}
++
++	// Determine button text - use config buttonText, fallback to default, or empty if redirect
++	let buttonText = "";
++	let redirectUrl = "";
++	let redirectMessage = "";
++
++	if (config.redirectUrl) {
++		redirectUrl = config.redirectUrl;
++		const delay = config.redirectDelay || 3000;
++		redirectMessage =
++			getTranslation(localization, "redirecting-message") ||
++			`Redirecting in ${delay / 1000} seconds...`;
++	} else {
++		buttonText =
++			config.buttonText ||
++			getTranslation(localization, "create-survey-btn") ||
++			"Create a Survey";
++	}
++
++	// Use Nunjucks to render the template
++	nunjucks.configure({ autoescape: false });
++	return nunjucks.renderString(endSlideTemplate, {
++		title: config.title || getTranslation(localization, "form-submitted-title"),
++		content:
++			config.content || getTranslation(localization, "form-submitted-subtitle"),
++		buttonText: buttonText,
++		alignment: alignment,
++		redirectUrl: redirectUrl,
++		redirectMessage: redirectMessage,
++		translations: {
++			createSurveyBtn:
++				getTranslation(localization, "create-survey-btn") || "Create a Survey",
++		},
++	});
++}
++
++module.exports = {
++	createEndSlide,
++};
+diff --git a/src/main.js b/src/main.js
+index e64e180..e886866 100644
+--- a/src/main.js
++++ b/src/main.js
+@@ -440,6 +440,23 @@ class Formsmd {
+ 			settings: getDefaultSettings(),
+ 			slideData: {
+ 				currentIndex: 0,
++				slideDefinitions: [],
++				endSlideDefinition: "",
++				availableSlides: 1,
++			},
++			// NEW: Lifecycle management state
++			lifecycle: {
++				questionCache: new Map(), // questionId -> {questionData, slideDefinition, slideElement}
++				questionPath: [], // Array of questionIds in order
++				userResponses: new Map(), // questionId -> responseData
++				currentQuestionIndex: -1,
++				currentQuestion: null,
++				currentSlideType: "question", // 'welcome', 'question', 'end'
++			},
++			// NEW: Survey configuration state
++			surveyConfig: {
++				welcomeScreen: null,
++				endScreen: null,
+ 			},
+ 		};
+ 	};
+@@ -2106,237 +2123,1654 @@ class Formsmd {
+ 	};
+ 
+ 	/**
+-	 * Go through each slide (after the current one) to get the next one to make
+-	 * active (depending on the jump condition).
++	 * Get survey settings and theme from API
+ 	 *
+-	 * @returns {{slide: HTMLElement, index: number}} the next slide and its
+-	 * index
++	 * @returns {Promise<Object>} survey data
+ 	 */
+-	getNextSlide = () => {
++	getSurveyFromAPI = async () => {
+ 		const instance = this;
+ 
+-		const currentIndex = instance.state.slideData.currentIndex;
+-		const slides = instance.container.querySelectorAll(".fmd-slide");
+-		let nextSlide = slides[currentIndex];
+-		let nextSlideIndex = currentIndex;
+-
+-		// Go through each slide (after the current one)
+-		for (let i = currentIndex + 1; i < slides.length; i++) {
+-			const slide = slides[i];
+-
+-			// If jump condition not present, this is the next slide
+-			if (!slide.hasAttribute("data-fmd-jump")) {
+-				nextSlide = slide;
+-				nextSlideIndex = i;
+-				break;
+-			}
++		// Get survey ID from configuration
++		const surveyId =
++			instance.state.apiConfig?.surveyId || instance.options.surveyId;
++		if (!surveyId) {
++			throw new Error("Survey ID is required but not provided");
++		}
++		const apiBaseUrl =
++			instance.state.apiConfig?.apiBaseUrl ||
++			instance.options.apiBaseUrl ||
++			"http://localhost:3001";
+ 
+-			// Use Nunjucks to check jump condition
+-			nunjucks.configure({ autoescape: false });
+-			const jumpCondition = nunjucks.renderString(
+-				`{% if ${slide.getAttribute("data-fmd-jump")} %}true{% endif %}`,
++		try {
++			const response = await fetch(
++				`${apiBaseUrl}/api/public/surveys/${surveyId}`,
+ 				{
+-					...instance.state.data,
+-					...instance.state.formData,
++					method: "GET",
++					headers: {
++						"Content-Type": "application/json",
++					},
+ 				},
+ 			);
+-			if (jumpCondition === "true") {
+-				nextSlide = slide;
+-				nextSlideIndex = i;
+-				break;
++
++			if (!response.ok) {
++				throw new Error(`HTTP error! status: ${response.status}`);
+ 			}
+-		}
+ 
+-		return {
+-			slide: nextSlide,
+-			index: nextSlideIndex,
+-		};
++			const result = await response.json();
++
++			if (result.success && result.data) {
++				return result.data;
++			}
++
++			throw new Error("Invalid survey API response format");
++		} catch (error) {
++			console.error("❌ Error fetching survey:", error);
++			throw error;
++		}
+ 	};
+ 
+ 	/**
+-	 * Get the CSS slide transition duration (in milliseconds).
++	 * Get the next question from the API
+ 	 *
+-	 * @returns {number}
++	 * @param {Object} currentResponse - Current question response data
++	 * @returns {Promise<{question: Object, isEndSlide: boolean}>} the next question data
+ 	 */
+-	getSlideTransitionDuration = () => {
++	getNextQuestionFromAPI = async (currentResponse = null) => {
+ 		const instance = this;
+ 
+-		const rootElem = instance.container.querySelector(".fmd-root");
++		// Get survey ID from configuration
++		const surveyId =
++			instance.state.apiConfig?.surveyId || instance.options.surveyId;
++		if (!surveyId) {
++			throw new Error("Survey ID is required but not provided");
++		}
++		const apiBaseUrl =
++			instance.state.apiConfig?.apiBaseUrl ||
++			instance.options.apiBaseUrl ||
++			"http://localhost:3001";
+ 
+-		// If the duration is saved on the root element, return saved duration
+-		if (rootElem.hasAttribute("data-fmd-slide-transition-duration")) {
+-			return Number(
+-				rootElem.getAttribute("data-fmd-slide-transition-duration"),
++		try {
++			const requestBody = {
++				sessionId: "test-session-12345",
++			};
++
++			// Add current question response if provided
++			if (currentResponse) {
++				requestBody.currentQuestionId = currentResponse.questionId;
++				requestBody.response = {
++					value: currentResponse.value,
++					timeSpent: currentResponse.timeSpent || 0,
++				};
++			}
++
++			const response = await fetch(
++				`${apiBaseUrl}/api/public/surveys/${surveyId}/question`,
++				{
++					method: "POST",
++					headers: {
++						"Content-Type": "application/json",
++					},
++					body: JSON.stringify(requestBody),
++				},
+ 			);
+-		}
+-		// Otherwise, calculate duration from CSS, save on root element, and return
+-		else {
+-			let duration =
+-				window
+-					.getComputedStyle(rootElem)
+-					.getPropertyValue("--fmd-slide-transition-duration") || "200ms";
+-			duration = Number(duration.slice(0, -2));
+-			rootElem.setAttribute("data-fmd-slide-transition-duration", duration);
+-			return duration;
++
++			if (!response.ok) {
++				throw new Error(`HTTP error! status: ${response.status}`);
++			}
++
++			const result = await response.json();
++
++			if (result.success && result.data) {
++				const { status, question, progress } = result.data;
++
++				if (status === "question" && question) {
++					// Convert API question to slide definition
++					const slideDefinition =
++						instance.convertAPIQuestionToSlideDefinition(question);
++					const isEndSlide =
++						progress.isLastQuestion ||
++						question.slideType === "end" ||
++						question.type === "end";
++
++					return {
++						question: question,
++						slideDefinition: slideDefinition,
++						isEndSlide: isEndSlide,
++						progress: progress,
++					};
++				} else if (status === "completed") {
++					return {
++						question: null,
++						slideDefinition: null,
++						isEndSlide: true,
++						progress: progress,
++					};
++				}
++			}
++
++			throw new Error("Invalid API response format");
++		} catch (error) {
++			console.error("❌ Error fetching next question:", error);
++			throw error;
+ 		}
+ 	};
+ 
+ 	/**
+-	 * When a new slide becomes active, do the following: update state, handle
+-	 * page progress (if applicable), handle the display and state of the footer
+-	 * slide control buttons, scroll to top and autofocus (if applicable).
+-	 *
+-	 * @param {HTMLElement} slide
+-	 * @param {number} index
+-	 * @param {boolean} fromInit
++	 * Initialize the form from API data
+ 	 */
+-	hasNewActiveSlide = (slide, index, fromInit) => {
++	initializeFromAPI = async () => {
+ 		const instance = this;
+ 
+-		// Update state
+-		instance.state.slideData.currentIndex = index;
++		// Record the start time for loader delay calculation
++		const loaderStartTime = Date.now();
+ 
+-		// Handle page progress (if applicable)
+-		const pageProgress = instance.container.querySelector(".fmd-page-progress");
+-		let slidePageProgress;
+-		if (slide.hasAttribute("data-fmd-page-progress")) {
+-			slidePageProgress = slide.getAttribute("data-fmd-page-progress");
+-		} else if (slide.classList.contains("fmd-first-slide")) {
+-			slidePageProgress = "0%";
+-		} else if (slide.classList.contains("fmd-end-slide")) {
+-			slidePageProgress = "100%";
+-		}
+-		if (
+-			pageProgress &&
+-			slidePageProgress !== undefined &&
+-			instance.state.settings["page-progress"] !== "decorative"
+-		) {
+-			const localization = instance.state.settings.localization;
+-			pageProgress.setAttribute("role", "progressbar");
+-			pageProgress.setAttribute(
+-				"aria-label",
+-				getTranslation(localization, "page-progress"),
++		// Configurable minimum loader display time (in milliseconds)
++		// You can adjust this value to test different delay times
++		const minLoaderTime = instance.options.minLoaderTime || 1500; // 1.5 seconds default
++
++		try {
++			// Get survey settings and theme
++			const surveyData = await instance.getSurveyFromAPI();
++
++			// Store welcome/end screen configuration
++			if (surveyData.welcomeScreen) {
++				instance.state.surveyConfig.welcomeScreen = surveyData.welcomeScreen;
++			}
++			if (surveyData.endScreen) {
++				instance.state.surveyConfig.endScreen = surveyData.endScreen;
++			}
++
++			// Apply survey theme and settings
++			instance.applySurveyTheme(surveyData);
++
++			// Set up the form structure first
++			instance.setupFormStructure();
++
++			// Get first question (could be welcome, regular, or end)
++			const firstQuestionData = await instance.getNextQuestionFromAPI();
++
++			// Store the current question data in state
++			instance.state.currentQuestion = firstQuestionData.question;
++
++			// Initialize lifecycle state with first question
++			if (firstQuestionData.question && firstQuestionData.question.questionId) {
++				instance.state.lifecycle.questionPath.push(
++					firstQuestionData.question.questionId,
++				);
++				instance.state.lifecycle.currentQuestionIndex = 0;
++				instance.state.lifecycle.currentQuestion = firstQuestionData.question;
++			}
++
++			// Create first slide from API question with lifecycle management
++			const firstSlideDefinition = instance.convertAPIQuestionToSlideDefinition(
++				firstQuestionData.question,
+ 			);
+-			pageProgress.setAttribute("aria-valuemin", "0");
+-			pageProgress.setAttribute("aria-valuemax", "100");
+-			pageProgress.setAttribute(
+-				"aria-valuenow",
+-				slidePageProgress.replace("%", ""),
++			const firstSlide = instance.createQuestionLifecycle(
++				firstQuestionData.question,
++				firstSlideDefinition,
++				firstQuestionData.isEndSlide,
++				firstQuestionData.question.slideType || "question",
+ 			);
+-			pageProgress
+-				.querySelector(".fmd-progress-bar")
+-				.setAttribute("style", `width: ${slidePageProgress}`);
+-		}
+ 
+-		// The timeout makes sure that the slide animation has completed
+-		setTimeout(function () {
+-			// Scroll
+-			if (instance.options.isFullPage) {
+-				window.scroll({ top: 0 });
+-			} else {
+-				instance.container.scroll({ top: 0 });
++			// Add event listeners
++			instance.addEventListeners(instance.container, true);
+ 
+-				// Scroll into view if no part of the container is within the viewport
+-				const rect = instance.container.getBoundingClientRect();
+-				if (!fromInit && !(rect.top < window.innerHeight && rect.bottom > 0)) {
+-					instance.container.scrollIntoView();
+-				}
++			// Calculate remaining time to meet minimum loader display time
++			const elapsedTime = Date.now() - loaderStartTime;
++			const remainingTime = Math.max(0, minLoaderTime - elapsedTime);
++
++			// Hide loader and show content after the calculated delay
++			setTimeout(() => {
++				instance.container
++					.querySelector(".fmd-loader-container")
++					.classList.add("fmd-d-none");
++
++				// Make first slide active
++				firstSlide.classList.add("fmd-slide-active");
++				instance.hasNewActiveSlide(firstSlide, 1, true);
++			}, remainingTime);
++		} catch (error) {
++			console.error("❌ Error initializing from API:", error);
++
++			// Show error message
++			const loaderContainer = instance.container.querySelector(
++				".fmd-loader-container",
++			);
++			if (loaderContainer) {
++				loaderContainer.innerHTML = `
++					<div class="fmd-text-center">
++						<div class="fmd-error">
++							<div class="fmd-error-inner">
++								<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" class="fmd-icon fmd-error-icon" aria-hidden="true" focusable="false">
++									<path d="M256 32c14.2 0 27.3 7.5 34.5 19.8l216 368c7.3 12.4 7.3 27.7 .2 40.1S486.3 480 472 480H40c-14.3 0-27.6-7.7-34.7-20.1s-7-27.8 .2-40.1l216-368C228.7 39.5 241.8 32 256 32zm0 128c-13.3 0-24 10.7-24 24V296c0 13.3 10.7 24 24 24s24-10.7 24-24V184c0-13.3-10.7-24-24-24zm32 224a32 32 0 1 0 -64 0 32 32 0 1 0 64 0z"></path>
++								</svg>
++								Failed to load survey. Please try again.
++							</div>
++						</div>
++					</div>
++				`;
+ 			}
++		}
++	};
+ 
+-			// Handle the display and state of the footer slide control buttons
+-			const footerBtnGroup = instance.container.querySelector(
+-				".fmd-footer .fmd-btn-group",
++	/**
++	 * Initialize the form with API configuration
++	 */
++	initializeWithApiConfig = (config) => {
++		const instance = this;
++
++		// Store API configuration
++		instance.state.apiConfig = {
++			surveyId: config.surveyId,
++			apiBaseUrl: config.apiBaseUrl,
++		};
++
++		// Set up basic template for API-driven mode
++		instance.template = ""; // Empty template for API-driven mode
++
++		// Update API endpoints to use the configured survey ID
++		instance.getSurveyFromAPI = async () => {
++			const surveyData = await fetchSurveyData(
++				config.surveyId,
++				config.apiBaseUrl,
+ 			);
+-			if (footerBtnGroup) {
+-				const footerPreviousBtn =
+-					footerBtnGroup.querySelector(".fmd-previous-btn");
+-				const footerNextBtn = footerBtnGroup.querySelector(".fmd-next-btn");
++			return surveyData;
++		};
+ 
+-				// Reset first
+-				footerBtnGroup.classList.remove("fmd-d-none");
+-				footerPreviousBtn.disabled = false;
+-				footerNextBtn.disabled = false;
++		instance.getNextQuestionFromAPI = async (currentResponse = null) => {
++			return await fetchNextQuestion(
++				config.surveyId,
++				config.apiBaseUrl,
++				currentResponse,
++			);
++		};
+ 
+-				// Disable previous button for first slide
+-				// Hide both for end slide
+-				if (slide.classList.contains("fmd-first-slide")) {
+-					footerPreviousBtn.disabled = true;
+-				} else if (slide.classList.contains("fmd-end-slide")) {
+-					footerBtnGroup.classList.add("fmd-d-none");
++		// Set up the basic DOM structure for API-driven mode
++		instance.setupApiDrivenStructure();
++
++		// Start API initialization
++		instance.initializeFromAPI();
++	};
++
++	/**
++	 * Initialize FormsMD with configuration
++	 */
++	initWithConfig = (config) => {
++		const instance = this;
++
++		// Update options with API configuration
++		if (config.isApiDriven) {
++			instance.options.isApiDriven = true;
++			instance.options.surveyId = config.surveyId;
++			instance.options.apiBaseUrl = config.apiBaseUrl;
++		}
++
++		// Initialize
++		instance.init();
++	};
++
++	/**
++	 * Apply survey theme and settings
++	 *
++	 * @param {Object} surveyData - Survey data from API
++	 */
++	applySurveyTheme = (surveyData) => {
++		const instance = this;
++
++		// Apply theme colors if available
++		if (surveyData.theme) {
++			const rootElem = instance.container.querySelector(".fmd-root");
++			if (rootElem) {
++				// Convert hex colors to RGB and apply
++				if (surveyData.theme.backgroundColor) {
++					const rgb = hexToRgb(surveyData.theme.backgroundColor);
++					if (rgb) {
++						rootElem.style.setProperty("--fmd-body-bg-r", rgb.r);
++						rootElem.style.setProperty("--fmd-body-bg-g", rgb.g);
++						rootElem.style.setProperty("--fmd-body-bg-b", rgb.b);
++						rootElem.style.setProperty(
++							"--fmd-body-bg-rgb",
++							`${rgb.r}, ${rgb.g}, ${rgb.b}`,
++						);
++					}
+ 				}
+ 
+-				// Also disable previous button if slide contains the specific attribute
+-				if (slide.hasAttribute("data-fmd-disable-prev-btn")) {
+-					footerPreviousBtn.disabled = true;
++				if (surveyData.theme.textColor) {
++					const rgb = hexToRgb(surveyData.theme.textColor);
++					if (rgb) {
++						rootElem.style.setProperty(
++							"--fmd-body-color-rgb",
++							`${rgb.r}, ${rgb.g}, ${rgb.b}`,
++						);
++						rootElem.style.setProperty("--fmd-body-color-r", rgb.r);
++						rootElem.style.setProperty("--fmd-body-color-g", rgb.g);
++						rootElem.style.setProperty("--fmd-body-color-b", rgb.b);
++					}
+ 				}
+-			}
+ 
+-			// Autofocus (if applicable)
+-			if (!fromInit || (fromInit && instance.options.isFullPage)) {
+-				if (instance.state.settings.autofocus === "all-slides") {
+-					const elemToAutofocus = slide.querySelector(
+-						"input.fmd-form-str-input, textarea.fmd-form-str-input, input.fmd-form-num-input, select.fmd-form-str-select, input.fmd-form-str-check-input, input.fmd-form-num-check-input, input.fmd-form-datetime-input, input.fmd-form-file-input",
++				if (surveyData.theme.buttonColor || surveyData.theme.accent) {
++					const rgb = hexToRgb(
++						surveyData.theme.buttonColor || surveyData.theme.accent,
+ 					);
+-					if (elemToAutofocus) {
+-						elemToAutofocus.focus();
++					if (rgb) {
++						rootElem.style.setProperty(
++							"--fmd-accent-rgb",
++							`${rgb.r}, ${rgb.g}, ${rgb.b}`,
++						);
++						rootElem.style.setProperty("--fmd-accent-r", rgb.r);
++						rootElem.style.setProperty("--fmd-accent-g", rgb.g);
++						rootElem.style.setProperty("--fmd-accent-b", rgb.b);
+ 					}
+-				} else {
+-					const elemToAutofocus = slide.querySelector("[data-fmd-autofocus]");
+-					if (elemToAutofocus) {
+-						elemToAutofocus.focus();
++				}
++
++				if (surveyData.theme.accentForeground) {
++					const rgb = hexToRgb(surveyData.theme.accentForeground);
++					if (rgb) {
++						rootElem.style.setProperty(
++							"--fmd-accent-foreground-rgb",
++							`${rgb.r}, ${rgb.g}, ${rgb.b}`,
++						);
++						rootElem.style.setProperty("--fmd-accent-foreground-r", rgb.r);
++						rootElem.style.setProperty("--fmd-accent-foreground-g", rgb.g);
++						rootElem.style.setProperty("--fmd-accent-foreground-b", rgb.b);
+ 					}
+ 				}
+ 			}
++		}
+ 
+-			// Set heights of <textarea> elements (in case of default values)
+-			slide
+-				.querySelectorAll("textarea.fmd-form-str-input")
+-				.forEach((textarea) => {
+-					instance.setTextareaHeight(textarea);
+-				});
+-		}, instance.getSlideTransitionDuration() * 2);
++		// Store survey data for later use
++		instance.state.surveyData = surveyData;
+ 	};
+ 
+ 	/**
+-	 * Fade out active slide and fade in next slide. The timeouts make sure that
+-	 * the animations work properly.
++	 * Get current form data for API submission using questionId-based approach
+ 	 *
+-	 * @param {HTMLElement} activeSlide
+-	 * @param {HTMLElement} nextSlide
++	 * @param {HTMLElement} activeSlide - The current active slide
++	 * @param {Object} originalQuestion - The original question object from API
++	 * @returns {Object} Form data with questionId, value, and timeSpent
+ 	 */
+-	fadeInNextSlide = (activeSlide, nextSlide) => {
++	getCurrentFormData = (activeSlide, originalQuestion = null) => {
+ 		const instance = this;
+ 
+-		const rootElem = instance.container.querySelector(".fmd-root");
+-		rootElem.classList.add("fmd-during-slide-transition");
+-		activeSlide.classList.add("fmd-fade-out-to-top");
+-		setTimeout(function () {
+-			activeSlide.classList.remove("fmd-slide-active");
+-			nextSlide.classList.add("fmd-fade-in-from-bottom");
+-			nextSlide.classList.add("fmd-slide-active");
+-			setTimeout(function () {
+-				nextSlide.classList.remove("fmd-fade-in-from-bottom");
+-				activeSlide.classList.remove("fmd-fade-out-to-top");
+-				setTimeout(function () {
+-					rootElem.classList.remove("fmd-during-slide-transition");
+-				}, instance.getSlideTransitionDuration());
+-			}, instance.getSlideTransitionDuration());
+-		}, instance.getSlideTransitionDuration());
++		// Get questionId from original question or extract from DOM
++		let questionId;
++		if (originalQuestion && originalQuestion.questionId) {
++			questionId = originalQuestion.questionId;
++		} else {
++			// Find the current question ID from the slide
++			const formField = activeSlide.querySelector("[data-fmd-name]");
++			if (!formField) {
++				console.log("🔍 DEBUG: No form field found with data-fmd-name");
++				return null;
++			}
++			questionId = formField.getAttribute("data-fmd-name");
++		}
++
++		// Get question type and configuration
++		const questionType =
++			originalQuestion?.type ||
++			this.getQuestionTypeFromDOM(activeSlide, questionId);
++		const questionConfig = originalQuestion?.options || {};
++
++		// Extract value based on question type
++		let value = this.extractValueByQuestionType(
++			activeSlide,
++			questionId,
++			questionType,
++			questionConfig,
++		);
++
++		// Calculate time spent (simple implementation)
++		const timeSpent = Math.floor(Math.random() * 30) + 5; // Random time for demo
++
++		const formData = {
++			questionId: questionId,
++			value: value,
++			timeSpent: timeSpent,
++		};
++		return formData;
+ 	};
+ 
+ 	/**
+-	 * Fade out active slide and fade in previous slide. The timeouts make sure
+-	 * that the animations work properly.
++	 * Get question type from DOM if not provided in original question
+ 	 *
+-	 * @param {HTMLElement} activeSlide
+-	 * @param {HTMLElement} prevSlide
++	 * @param {HTMLElement} activeSlide - The current active slide
++	 * @param {string} questionId - The question ID
++	 * @returns {string} Question type
+ 	 */
+-	fadeInPrevSlide = (activeSlide, prevSlide) => {
+-		const instance = this;
++	getQuestionTypeFromDOM = (activeSlide, questionId) => {
++		// Look for fieldset with data-fmd-name (choice inputs)
++		const fieldset = activeSlide.querySelector(
++			`fieldset[data-fmd-name="${questionId}"]`,
++		);
++		if (fieldset) {
++			const fieldType = fieldset.getAttribute("data-fmd-type");
++			if (fieldType === "radio") {
++				return "choice_input";
++			}
++			if (fieldType === "checkbox") {
++				return "choice_input";
++			}
++			if (fieldType === "num-radio") {
++				return "rating_input";
++			}
++		}
+ 
+-		const rootElem = instance.container.querySelector(".fmd-root");
+-		rootElem.classList.add("fmd-during-slide-transition");
+-		activeSlide.classList.add("fmd-fade-out-to-bottom");
++		// Look for individual input elements
++		const input = activeSlide.querySelector(`input[name="${questionId}"]`);
++		if (input) {
++			const inputType = input.getAttribute("type");
++			if (
++				inputType === "text" ||
++				inputType === "email" ||
++				inputType === "url"
++			) {
++				return "text_input";
++			}
++			if (inputType === "number") {
++				return "number_input";
++			}
++			if (inputType === "tel") {
++				return "text_input";
++			}
++			if (
++				inputType === "datetime-local" ||
++				inputType === "date" ||
++				inputType === "time"
++			) {
++				return "datetime_input";
++			}
++		}
++
++		// Look for textarea
++		const textarea = activeSlide.querySelector(
++			`textarea[name="${questionId}"]`,
++		);
++		if (textarea) {
++			return "text_input";
++		}
++
++		// Look for select
++		const select = activeSlide.querySelector(`select[name="${questionId}"]`);
++		if (select) {
++			return "choice_input";
++		}
++
++		// Default fallback
++		return "text_input";
++	};
++
++	/**
++	 * Extract value based on question type using questionId
++	 *
++	 * @param {HTMLElement} activeSlide - The current active slide
++	 * @param {string} questionId - The question ID
++	 * @param {string} questionType - The question type
++	 * @param {Object} questionConfig - Question configuration (options, etc.)
++	 * @returns {string|number|Array} Extracted value
++	 */
++	extractValueByQuestionType = (
++		activeSlide,
++		questionId,
++		questionType,
++		questionConfig,
++	) => {
++		switch (questionType) {
++			case "choice_input":
++				return this.extractChoiceInputValue(
++					activeSlide,
++					questionId,
++					questionConfig,
++				);
++			case "text_input":
++			case "email_input":
++			case "urlinput":
++			case "telinput":
++				return this.extractTextInputValue(activeSlide, questionId);
++			case "number_input":
++				return this.extractNumberInputValue(activeSlide, questionId);
++			case "rating_input":
++			case "opinion_scale":
++				return this.extractRatingInputValue(activeSlide, questionId);
++			case "datetime_input":
++			case "dateinput":
++			case "timeinput":
++				return this.extractDateTimeInputValue(activeSlide, questionId);
++			case "file_input":
++				return this.extractFileInputValue(activeSlide, questionId);
++			default:
++				return this.extractTextInputValue(activeSlide, questionId);
++		}
++	};
++
++	/**
++	 * Extract value from choice input (radio/checkbox)
++	 *
++	 * @param {HTMLElement} activeSlide - The current active slide
++	 * @param {string} questionId - The question ID
++	 * @param {Object} questionConfig - Question configuration
++	 * @returns {string|Array} Extracted value
++	 */
++	extractChoiceInputValue = (activeSlide, questionId, questionConfig) => {
++		// Check if it's multiple choice (checkbox) or single choice (radio)
++		const isMultiple = questionConfig?.multiple || false;
++
++		// Get the actual radio button name from the first radio button
++		let actualRadioName = questionId;
++		const allRadioButtons = activeSlide.querySelectorAll('input[type="radio"]'); // ✅ Add this line
++		if (allRadioButtons.length > 0) {
++			actualRadioName = allRadioButtons[0].name;
++		}
++
++		if (isMultiple) {
++			// Multiple choice - return array of selected values
++			const checkedInputs = activeSlide.querySelectorAll(
++				`input[name="${actualRadioName}"]:checked`,
++			);
++			const values = [];
++			checkedInputs.forEach((input) => {
++				values.push(input.value);
++			});
++			return values;
++		} else {
++			// Single choice - return single selected value
++			const checkedInput = activeSlide.querySelector(
++				`input[name="${actualRadioName}"]:checked`,
++			);
++			return checkedInput ? checkedInput.value : "";
++		}
++	};
++
++	/**
++	 * Extract value from text input
++	 *
++	 * @param {HTMLElement} activeSlide - The current active slide
++	 * @param {string} questionId - The question ID
++	 * @returns {string} Extracted value
++	 */
++	extractTextInputValue = (activeSlide, questionId) => {
++		const input = activeSlide.querySelector(`input[name="${questionId}"]`);
++		const textarea = activeSlide.querySelector(
++			`textarea[name="${questionId}"]`,
++		);
++
++		if (input) {
++			return input.value || "";
++		} else if (textarea) {
++			return textarea.value || "";
++		}
++
++		return "";
++	};
++
++	/**
++	 * Extract value from number input
++	 *
++	 * @param {HTMLElement} activeSlide - The current active slide
++	 * @param {string} questionId - The question ID
++	 * @returns {number|null} Extracted value
++	 */
++	extractNumberInputValue = (activeSlide, questionId) => {
++		const input = activeSlide.querySelector(`input[name="${questionId}"]`);
++		if (input && input.value) {
++			const numValue = parseFloat(input.value);
++			return isNaN(numValue) ? null : numValue;
++		}
++		return null;
++	};
++
++	/**
++	 * Extract value from rating input
++	 *
++	 * @param {HTMLElement} activeSlide - The current active slide
++	 * @param {string} questionId - The question ID
++	 * @returns {number|null} Extracted value
++	 */
++	extractRatingInputValue = (activeSlide, questionId) => {
++		const checkedInput = activeSlide.querySelector(
++			`input[name="${questionId}"]:checked`,
++		);
++		if (checkedInput && checkedInput.value) {
++			const numValue = parseInt(checkedInput.value);
++			return isNaN(numValue) ? null : numValue;
++		}
++		return null;
++	};
++
++	/**
++	 * Extract value from datetime input
++	 *
++	 * @param {HTMLElement} activeSlide - The current active slide
++	 * @param {string} questionId - The question ID
++	 * @returns {string} Extracted value
++	 */
++	extractDateTimeInputValue = (activeSlide, questionId) => {
++		const input = activeSlide.querySelector(`input[name="${questionId}"]`);
++		return input ? input.value || "" : "";
++	};
++
++	/**
++	 * Extract value from file input
++	 *
++	 * @param {HTMLElement} activeSlide - The current active slide
++	 * @param {string} questionId - The question ID
++	 * @returns {string} Extracted value
++	 */
++	extractFileInputValue = (activeSlide, questionId) => {
++		const input = activeSlide.querySelector(`input[name="${questionId}"]`);
++		if (input && input.files && input.files.length > 0) {
++			return input.files[0].name; // Return filename for now
++		}
++		return "";
++	};
++
++	/**
++	 * Set up the basic DOM structure for API-driven mode
++	 */
++	setupApiDrivenStructure = () => {
++		const instance = this;
++
++		// Set up basic settings for API-driven mode
++		instance.state.settings = {
++			...instance.state.settings,
++			"id": instance.options.surveyId,
++			"title": "Loading Survey...",
++			"page": "form-slides",
++			"slide-delimiter": "---",
++			"submit-button-text": "OK",
++			"restart-button": "hide",
++			"localization": "en",
++			"dir": "ltr",
++		};
++
++		// Set up basic template
++		instance.template = "";
++
++		// Set up basic data
++		instance.state.data = {};
++
++		// Get or create response id
++		instance.getOrCreateResponseId();
++	};
++
++	/**
++	 * Set up the basic form structure
++	 */
++	setupFormStructure = () => {
++		const instance = this;
++
++		// Create main container structure
++		const mainContainer = instance.container.querySelector(".fmd-main");
++		if (mainContainer) {
++			mainContainer.innerHTML = `
++				<div class="fmd-main-container">
++					<div class="fmd-loader-container">
++						<div class="fmd-text-center fmd-mb-3">
++							<div class="fmd-specific-fs-14">Loading...</div>
++						</div>
++						<div class="fmd-loader-progress" role="status" aria-label="Loading"></div>
++					</div>
++					<!-- Slides will be inserted here dynamically -->
++				</div>
++			`;
++		}
++	};
++
++	/**
++	 * Convert API question to slide definition format
++	 *
++	 * @param {Object} question - The question object from API
++	 * @returns {string} slide definition in markdown format
++	 */
++	convertAPIQuestionToSlideDefinition = (question) => {
++		const instance = this;
++
++		// Handle welcome screen questions
++		if (question.type === "welcome") {
++			// Create a special slide definition for welcome screens
++			// This will be rendered using the welcome screen template
++			return {
++				type: "welcome",
++				questionId: question.questionId,
++				title: question.question || question.title,
++				content: question.content || question.description,
++				buttonText: question.options?.buttonText || question.buttonText,
++				alignment:
++					question.options?.alignment || question.alignment || "center",
++				showProgress: question.showProgress !== false,
++			};
++		}
++
++		// Handle end screen questions
++		if (question.type === "end") {
++			// Create a special slide definition for end screens
++			return {
++				type: "end",
++				questionId: question.questionId,
++				title: question.question || question.title,
++				content: question.content || question.description,
++				buttonText: question.buttonText,
++				showProgress: question.showProgress !== false,
++			};
++		}
++
++		// Map API question types to FormsMD field types
++		let fieldType = "text_input";
++		if (question.type === "choice_input") {
++			fieldType = "choice_input";
++		} else if (question.type === "number_input") {
++			fieldType = "number_input";
++		} else if (question.type === "rating_input") {
++			fieldType = "rating_input";
++		} else if (question.type === "datetime_input") {
++			fieldType = "datetime_input";
++		} else if (question.type === "file_input") {
++			fieldType = "file_input";
++		} else if (question.type === "opinion_scale") {
++			fieldType = "opinion_scale";
++		} else if (question.type === "country_calling_code") {
++			fieldType = "country_calling_code";
++		}
++
++		// Build the slide definition
++		let slideDefinition = `\n`;
++
++		// Add progress if available
++		if (question.order) {
++			slideDefinition += `|> ${Math.round((question.order / 5) * 100)}%\n\n`;
++		}
++
++		// Build the field definition
++		slideDefinition += `${question.questionId}${question.required ? "\\*" : ""} = ${fieldType}(\n`;
++		slideDefinition += `| question = ${question.question}\n`;
++
++		// Add field-specific properties
++		if (
++			question.type === "choice_input" &&
++			question.options &&
++			question.options.choices
++		) {
++			const choices = question.options.choices.map((choice) => choice.text);
++			slideDefinition += `| choices = ${choices.join(", ")}\n`;
++		} else if (question.type === "choice_input" && question.choices) {
++			// Fallback for old format
++			slideDefinition += `| choices = ${question.choices.join(", ")}\n`;
++		}
++
++		if (question.description) {
++			slideDefinition += `| description = ${question.description}\n`;
++		}
++
++		slideDefinition += `)\n`;
++
++		return slideDefinition;
++	};
++
++	/**
++	 * Create the next slide from its definition and insert it into the DOM
++	 *
++	 * @param {string} slideDefinition
++	 * @param {boolean} isEndSlide
++	 * @returns {HTMLElement} the created slide element
++	 */
++	createNextSlide = (slideDefinition, isEndSlide) => {
++		const instance = this;
++
++		// Debug logging
++
++		// Import required functions
++		const { renderSlideFromDefinition } = require("./slides-parse");
++		const { createContentTemplate } = require("./templates-create");
++
++		let slideHtml;
++
++		if (isEndSlide) {
++			// Handle end slide - use the end slide template
++			const { getTranslation } = require("./translations");
++
++			// Create default end slide if no definition provided
++			if (!slideDefinition) {
++				const endSlideTemplate = `
++				<div class="fmd-slide fmd-end-slide">
++					<div class="fmd-grid">
++						<div class="fmd-text-center">
++							<h1 class="fmd-h2 fmd-mb-2">${getTranslation(instance.state.settings.localization, "form-submitted-title")}</h1>
++							<p class="fmd-fs-lead fmd-mb-1">${getTranslation(instance.state.settings.localization, "form-submitted-subtitle")}</p>
++						</div>
++					</div>
++				</div>`;
++				slideHtml = endSlideTemplate;
++			} else {
++				// Render the end slide definition
++				slideHtml = renderSlideFromDefinition(
++					slideDefinition,
++					instance.state.settings.page === "form-slides" ? true : false,
++					false, // isFirstSlide
++					{
++						showRestartBtn:
++							instance.state.settings["restart-button"] === "show"
++								? true
++								: false,
++						submitBtnText: instance.state.settings["submit-button-text"] || "",
++					},
++					instance.state.settings.localization,
++				);
++			}
++		} else {
++			// Render regular slide
++			slideHtml = renderSlideFromDefinition(
++				slideDefinition,
++				instance.state.settings.page === "form-slides" ? true : false,
++				false, // isFirstSlide
++				{
++					showRestartBtn:
++						instance.state.settings["restart-button"] === "show" ? true : false,
++					submitBtnText: instance.state.settings["submit-button-text"] || "",
++				},
++				instance.state.settings.localization,
++			);
++		}
++
++		// Create DOM element from HTML
++		const tempDiv = document.createElement("div");
++		tempDiv.innerHTML = slideHtml;
++		const slideElement = tempDiv.firstElementChild;
++
++		// // Insert the slide into the DOM
++		// const mainContainer = instance.container.querySelector(
++		// 	".fmd-main-container",
++		// );
++
++		// // Remove any existing slides to prevent form element conflicts
++		// const existingSlides = mainContainer.querySelectorAll(
++		// 	".fmd-slide:not(.fmd-first-slide)",
++		// );
++		// existingSlides.forEach((slide) => {
++		// 	if (slide !== slideElement) {
++		// 		slide.remove();
++		// 	}
++		// });
++
++		// mainContainer.appendChild(slideElement);
++
++		// // Process the slide content (markdown, etc.)
++		// instance.processSlideContent(slideElement);
++
++		// // Add event listeners to the new slide
++		// instance.addEventListeners(slideElement, false);
++
++		// // Update available slides count
++		// instance.state.slideData.availableSlides++;
++
++		// Debug logging for slide insertion
++
++		// Debug logging
++
++		return slideElement;
++	};
++
++	/**
++	 * Lifecycle Manager - Create question with caching
++	 */
++	createQuestionLifecycle = (
++		questionData,
++		slideDefinition,
++		isEndSlide = false,
++		slideType = "question",
++	) => {
++		const instance = this;
++
++		let slideElement;
++
++		// Handle different slide types
++		if (
++			slideType === "welcome" ||
++			(slideDefinition && slideDefinition.type === "welcome")
++		) {
++			// Create welcome slide using the slide definition data
++			const welcomeData =
++				slideDefinition && slideDefinition.type === "welcome"
++					? slideDefinition
++					: questionData;
++			const welcomeHtml = instance.renderWelcomeSlide(welcomeData, welcomeData);
++			slideElement = instance.createContentSlide(welcomeHtml);
++		} else if (
++			slideType === "end" ||
++			(slideDefinition && slideDefinition.type === "end")
++		) {
++			// Create end slide using the slide definition data
++			const endData =
++				slideDefinition && slideDefinition.type === "end"
++					? slideDefinition
++					: questionData;
++			const endHtml = instance.renderEndSlide(endData, endData);
++			slideElement = instance.createContentSlide(endHtml);
++		} else {
++			// Create regular question slide (DOM element only, no insertion)
++			slideElement = instance.createNextSlide(slideDefinition, isEndSlide);
++
++			// ✅ ADD BACK: DOM insertion and cleanup logic here
++			// Insert the slide into the DOM
++			const mainContainer = instance.container.querySelector(
++				".fmd-main-container",
++			);
++
++			// Remove any existing slides to prevent form element conflicts
++			const existingSlides = mainContainer.querySelectorAll(
++				".fmd-slide:not(.fmd-first-slide)",
++			);
++			existingSlides.forEach((slide) => {
++				if (slide !== slideElement) {
++					slide.remove();
++				}
++			});
++
++			mainContainer.appendChild(slideElement);
++
++			// Process the slide content (markdown, etc.)
++			instance.processSlideContent(slideElement);
++
++			// Add event listeners to the new slide
++			instance.addEventListeners(slideElement, false);
++
++			// Update available slides count
++			instance.state.slideData.availableSlides++;
++
++			// ✅ ADD: Fade transition call here
++			// Get the current active slide for transition
++			const activeSlide = instance.container.querySelector(".fmd-slide-active");
++			if (activeSlide) {
++				// Trigger fade out of current slide and fade in of new slide
++				instance.fadeInNextSlide(activeSlide, slideElement);
++			}
++		}
++
++		// Store question data in cache if not end slide and has questionId
++		if (slideType === "question" && questionData && questionData.questionId) {
++			instance.state.lifecycle.questionCache.set(questionData.questionId, {
++				questionData,
++				slideDefinition,
++				slideElement: null, // Will be set when destroyed
++			});
++		}
++
++		return slideElement;
++	};
++
++	/**
++	 * Lifecycle Manager - Destroy question and cache it
++	 */
++	destroyQuestionLifecycle = (slideElement) => {
++		const instance = this;
++
++		if (!slideElement) {
++			return;
++		}
++
++		// Store the slide element in cache for potential reuse
++		const questionId = slideElement
++			.querySelector("[data-fmd-name]")
++			?.getAttribute("data-fmd-name");
++		if (questionId && instance.state.lifecycle.questionCache.has(questionId)) {
++			const cachedQuestion =
++				instance.state.lifecycle.questionCache.get(questionId);
++			cachedQuestion.slideElement = slideElement.cloneNode(true);
++		}
++
++		// Remove from DOM
++		slideElement.remove();
++	};
++
++	/**
++	 * Get the currently active slide
++	 */
++	getActiveSlide = () => {
++		const instance = this;
++		return instance.container.querySelector(".fmd-slide-active");
++	};
++
++	/**
++	 * Reset button processing state - ensures all buttons are enabled and functional
++	 */
++	resetButtonProcessingState = () => {
++		const instance = this;
++		const rootElem = instance.container.querySelector(".fmd-root");
++
++		// Remove processing state from all buttons
++		const processingButtons = instance.container.querySelectorAll(
++			".fmd-btn-processing",
++		);
++		processingButtons.forEach((btn) => {
++			instance.removeBtnProcessing(btn);
++		});
++
++		// Enable all clicks on root element
++		rootElem.removeEventListener("click", instance.disableAllClicks, true);
++
++		// Ensure the active slide's buttons are clean and functional
++		const activeSlide = instance.getActiveSlide();
++
++		if (activeSlide) {
++			// Remove any lingering processing classes from the active slide
++			const activeSlideButtons = activeSlide.querySelectorAll(
++				".fmd-btn-processing",
++			);
++
++			activeSlideButtons.forEach((btn) => {
++				instance.removeBtnProcessing(btn);
++			});
++
++			// Log all buttons on the active slide
++			const allButtons = activeSlide.querySelectorAll(
++				"button, input[type='submit']",
++			);
++		}
++	};
++
++	/**
++	 * Show a slide (make it active)
++	 */
++	showSlide = (slideElement) => {
++		const instance = this;
++
++		// Remove active class from all slides
++		instance.container
++			.querySelectorAll(".fmd-slide-active")
++			.forEach((slide) => {
++				slide.classList.remove("fmd-slide-active");
++			});
++
++		// Add active class to the target slide
++		slideElement.classList.add("fmd-slide-active");
++
++		// Update slide index
++		const slides = instance.container.querySelectorAll(".fmd-slide");
++		const slideIndex = Array.from(slides).indexOf(slideElement);
++		if (slideIndex !== -1) {
++			instance.hasNewActiveSlide(slideElement, slideIndex, false);
++		}
++
++		// Reset button processing state for the new slide
++		instance.resetButtonProcessingState();
++	};
++
++	/**
++	 * Navigation Manager - Navigate to specific question
++	 */
++	navigateToQuestion = async (targetIndex) => {
++		const instance = this;
++		const { lifecycle } = instance.state;
++
++		if (targetIndex < 0 || targetIndex >= lifecycle.questionPath.length) {
++			console.error("Invalid question index:", targetIndex);
++			return;
++		}
++
++		const targetQuestionId = lifecycle.questionPath[targetIndex];
++		const activeSlide = instance.getActiveSlide();
++
++		// Check if question is cached
++		const cachedQuestion = lifecycle.questionCache.get(targetQuestionId);
++
++		if (cachedQuestion) {
++			// Use cached question
++			const slideElement = cachedQuestion.slideElement
++				? cachedQuestion.slideElement.cloneNode(true)
++				: instance.createNextSlide(cachedQuestion.slideDefinition, false);
++
++			// Insert into DOM
++			const mainContainer = instance.container.querySelector(
++				".fmd-main-container",
++			);
++			mainContainer.appendChild(slideElement);
++
++			// Restore user response if exists
++			const userResponse = lifecycle.userResponses.get(targetQuestionId);
++			if (userResponse) {
++				instance.restoreUserResponse(slideElement, userResponse);
++			}
++
++			// Update state
++			lifecycle.currentQuestionIndex = targetIndex;
++			lifecycle.currentQuestion = cachedQuestion.questionData;
++			instance.state.currentQuestion = cachedQuestion.questionData;
++
++			// Use existing transition logic if we have an active slide
++			if (activeSlide) {
++				instance.fadeInNextSlide(activeSlide, slideElement);
++			} else {
++				instance.showSlide(slideElement);
++				// showSlide already calls resetButtonProcessingState
++			}
++		} else {
++			// Question not cached - this shouldn't happen for previous questions
++			console.error("Question not found in cache:", targetQuestionId);
++		}
++	};
++
++	/**
++	 * Restore user response to a slide
++	 */
++	restoreUserResponse = (slideElement, response) => {
++		const instance = this;
++
++		const formField = slideElement.querySelector(
++			`[data-fmd-name="${response.questionId}"]`,
++		);
++		if (!formField) {
++			return;
++		}
++
++		// Restore value based on field type
++		if (formField.type === "radio" || formField.type === "checkbox") {
++			if (formField.type === "radio") {
++				const radioButton = slideElement.querySelector(
++					`input[type="radio"][value="${response.value}"]`,
++				);
++				if (radioButton) {
++					radioButton.checked = true;
++				}
++			} else {
++				// Checkbox - response.value should be an array
++				const values = Array.isArray(response.value)
++					? response.value
++					: [response.value];
++				values.forEach((value) => {
++					const checkbox = slideElement.querySelector(
++						`input[type="checkbox"][value="${value}"]`,
++					);
++					if (checkbox) {
++						checkbox.checked = true;
++					}
++				});
++			}
++		} else {
++			formField.value = response.value || "";
++		}
++	};
++
++	/**
++	 * Handle answer changes and branching
++	 */
++	handleAnswerChange = async (questionId, newResponse) => {
++		const instance = this;
++		const { lifecycle } = instance.state;
++
++		// Update user response
++		lifecycle.userResponses.set(questionId, newResponse);
++
++		// Find the index of the changed question
++		const changedIndex = lifecycle.questionPath.indexOf(questionId);
++		if (changedIndex === -1) {
++			return;
++		}
++
++		// Invalidate all subsequent questions (branching)
++		const questionsToInvalidate = lifecycle.questionPath.slice(
++			changedIndex + 1,
++		);
++		questionsToInvalidate.forEach((qId) => {
++			lifecycle.questionCache.delete(qId);
++			lifecycle.userResponses.delete(qId);
++		});
++
++		// Remove invalidated questions from path
++		lifecycle.questionPath.splice(changedIndex + 1);
++
++		// If we're currently on an invalidated question, go back to the changed question
++		if (lifecycle.currentQuestionIndex > changedIndex) {
++			await instance.navigateToQuestion(changedIndex);
++		}
++	};
++
++	/**
++	 * Enhanced back navigation
++	 */
++	handleBackNavigation = () => {
++		const instance = this;
++		const { lifecycle } = instance.state;
++
++		const previousIndex = lifecycle.currentQuestionIndex - 1;
++		if (previousIndex >= 0) {
++			instance.navigateToQuestion(previousIndex);
++		}
++	};
++
++	/**
++	 * Enhanced forward navigation
++	 */
++	handleForwardNavigation = () => {
++		const instance = this;
++		const { lifecycle } = instance.state;
++
++		const nextIndex = lifecycle.currentQuestionIndex + 1;
++		if (nextIndex < lifecycle.questionPath.length) {
++			instance.navigateToQuestion(nextIndex);
++		}
++	};
++
++	/**
++	 * Render welcome slide
++	 */
++	renderWelcomeSlide = (question, config) => {
++		const instance = this;
++
++		// Import the welcome screen template
++		const { createWelcomeScreen } = require("./welcome-screen-template");
++
++		// Create welcome screen HTML using the template
++		return createWelcomeScreen(config, instance.state.settings.localization);
++	};
++
++	/**
++	 * Render end slide
++	 */
++	renderEndSlide = (question, config) => {
++		const instance = this;
++		const { getTranslation } = require("./translations");
++		var nunjucks = require("nunjucks");
++
++		// Extract settings from question data
++		const title = question?.question || question?.title;
++		const content = question?.content || question?.description;
++		const buttonText =
++			question?.options?.ctaText || question?.options?.buttonText;
++		const alignment = question?.options?.alignment || "center";
++		const redirectUrl = question?.options?.redirectUrl;
++		const redirectDelay = question?.options?.redirectDelay || 3000;
++
++		// End slide template - mirrors welcome screen structure
++		const endSlideTemplate = `
++		<div
++			class="fmd-slide fmd-end-slide"
++			data-fmd-page-progress="100%"
++		>
++			<div class="fmd-grid" style="text-align: {{ alignment }};">
++				<div class="fmd-end-content">
++					{% if title %}
++					<h1 class="fmd-end-title fmd-form-question">
++						{{ title | safe }}
++					</h1>
++					{% endif %}
++					
++					{% if content %}
++					<div class="fmd-end-description fmd-form-description">
++						{{ content | safe }}
++					</div>
++					{% endif %}
++				</div>
++				
++				{% if buttonText and not redirectUrl %}
++				<div class="fmd-end-controls fmd-d-flex" style="justify-content: {% if alignment == 'left' %}flex-start{% elif alignment == 'right' %}flex-end{% else %}center{% endif %};">
++					<button type="button" class="fmd-end-btn fmd-btn fmd-btn-accent fmd-d-flex fmd-align-items-center fmd-justify-content-center">
++						{{ buttonText }}
++						<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512" class="fmd-icon fmd-ms-2 fmd-hide-rtl" aria-hidden="true" focusable="false"><path d="M273 239c9.4 9.4 9.4 24.6 0 33.9L113 433c9.4 9.4-24.6 9.4-33.9 0s-9.4-24.6 0-33.9l143-143L79 113c9.4-9.4-9.4-24.6 0-33.9s24.6-9.4 33.9 0L273 239z"/></svg>
++						<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512" class="fmd-icon fmd-ms-2 fmd-hide-ltr" aria-hidden="true" focusable="false"><path d="M47 239c9.4 9.4 9.4 24.6 0 33.9L207 433c9.4 9.4 24.6 9.4 33.9 0s9.4-24.6 0-33.9L97.9 256 241 113c9.4-9.4 9.4-24.6 0-33.9s-24.6-9.4-33.9 0L273 239z"/></svg>
++					</button>
++				</div>
++				{% endif %}
++				
++				{% if redirectUrl %}
++				<div class="fmd-end-redirect fmd-d-flex" style="justify-content: {% if alignment == 'left' %}flex-start{% elif alignment == 'right' %}flex-end{% else %}center{% endif %};">
++					<div class="fmd-end-redirect-message">
++						{{ redirectMessage | safe }}
++					</div>
++				</div>
++				{% endif %}
++			</div>
++		</div>
++		`;
++
++		// Determine button text and redirect settings
++		let finalButtonText = "";
++		let finalRedirectUrl = "";
++		let redirectMessage = "";
++
++		if (redirectUrl) {
++			finalRedirectUrl = redirectUrl;
++			redirectMessage =
++				getTranslation(
++					instance.state.settings.localization,
++					"redirecting-message",
++				) || `Redirecting in ${redirectDelay / 1000} seconds...`;
++		} else {
++			finalButtonText =
++				buttonText ||
++				getTranslation(
++					instance.state.settings.localization,
++					"create-survey-btn",
++				) ||
++				"Create a Survey";
++		}
++
++		// Use Nunjucks to render the template
++		nunjucks.configure({ autoescape: false });
++		return nunjucks.renderString(endSlideTemplate, {
++			title:
++				title ||
++				getTranslation(
++					instance.state.settings.localization,
++					"form-submitted-title",
++				),
++			content:
++				content ||
++				getTranslation(
++					instance.state.settings.localization,
++					"form-submitted-subtitle",
++				),
++			buttonText: finalButtonText,
++			alignment: alignment,
++			redirectUrl: finalRedirectUrl,
++			redirectMessage: redirectMessage,
++		});
++	};
++
++	/**
++	 * Render content slide (generic)
++	 */
++	renderContentSlide = (slideType, question, config) => {
++		const instance = this;
++
++		if (slideType === "welcome") {
++			return instance.renderWelcomeSlide(question, config);
++		} else if (slideType === "end") {
++			return instance.renderEndSlide(question, config);
++		}
++
++		return null;
++	};
++
++	/**
++	 * Handle end screen navigation
++	 */
++	handleEndNavigation = () => {
++		const instance = this;
++		// Get current question to check for redirect settings
++		const currentQuestion = instance.state.currentQuestion;
++
++		// Check if there's a redirect URL configured
++		if (currentQuestion?.options?.redirectUrl) {
++			const redirectUrl = currentQuestion.options.redirectUrl;
++			const redirectDelay = currentQuestion.options.redirectDelay || 3000;
++
++			// Redirect after delay
++			setTimeout(() => {
++				window.location.href = redirectUrl;
++			}, redirectDelay);
++		} else {
++			// Default CTA action - redirect to Forms.md or configured URL
++			const defaultCTAUrl =
++				currentQuestion?.options?.ctaUrl || "https://forms.md";
++
++			window.location.href = defaultCTAUrl;
++		}
++	};
++
++	/**
++	 * Create content slide from HTML
++	 */
++	createContentSlide = (slideHtml) => {
++		const instance = this;
++
++		// Create DOM element from HTML
++		const tempDiv = document.createElement("div");
++		tempDiv.innerHTML = slideHtml;
++		const slideElement = tempDiv.firstElementChild;
++
++		// Insert the slide into the DOM
++		const mainContainer = instance.container.querySelector(
++			".fmd-main-container",
++		);
++		mainContainer.appendChild(slideElement);
++
++		// Process the slide content (markdown, etc.)
++		instance.processSlideContent(slideElement);
++
++		// Add event listeners to the new slide
++		instance.addEventListeners(slideElement, false);
++
++		// Update available slides count
++		instance.state.slideData.availableSlides++;
++
++		return slideElement;
++	};
++
++	/**
++	 * Process slide content (markdown parsing, highlighting, etc.)
++	 *
++	 * @param {HTMLElement} slideElement
++	 */
++	processSlideContent = (slideElement) => {
++		const instance = this;
++
++		// Process markdown content
++		slideElement.querySelectorAll("markdown").forEach((markdownElement) => {
++			const content = markdownElement.innerHTML;
++
++			// Parse markdown
++			marked.use({
++				renderer: renderer,
++				markedSettings: {
++					"css-prefix": instance.state.settings["css-prefix"],
++					"form-delimiter": instance.state.settings["form-delimiter"],
++					"id": instance.state.settings.id,
++					"localization": instance.state.settings.localization,
++				},
++			});
++
++			let parsedContent = marked.parse(content);
++
++			// Sanitize if needed
++			if (instance.options.sanitize) {
++				const DOMPurify = createDOMPurify(window);
++				parsedContent = DOMPurify.sanitize(parsedContent);
++			}
++
++			// Replace markdown element with parsed content
++			markdownElement.outerHTML = parsedContent;
++		});
++
++		// Highlight code blocks
++		slideElement.querySelectorAll("pre code").forEach((codeBlock) => {
++			hljs.highlightElement(codeBlock);
++		});
++
++		// Set heights of <textarea> elements (in case of default values)
++		slideElement
++			.querySelectorAll("textarea.fmd-form-str-input")
++			.forEach((textarea) => {
++				instance.setTextareaHeight(textarea);
++			});
++	};
++
++	/**
++	 * Get the CSS slide transition duration (in milliseconds).
++	 *
++	 * @returns {number}
++	 */
++	getSlideTransitionDuration = () => {
++		const instance = this;
++
++		const rootElem = instance.container.querySelector(".fmd-root");
++
++		// If the duration is saved on the root element, return saved duration
++		if (rootElem.hasAttribute("data-fmd-slide-transition-duration")) {
++			return Number(
++				rootElem.getAttribute("data-fmd-slide-transition-duration"),
++			);
++		}
++		// Otherwise, calculate duration from CSS, save on root element, and return
++		else {
++			let duration =
++				window
++					.getComputedStyle(rootElem)
++					.getPropertyValue("--fmd-slide-transition-duration") || "200ms";
++			duration = Number(duration.slice(0, -2));
++			rootElem.setAttribute("data-fmd-slide-transition-duration", duration);
++			return duration;
++		}
++	};
++
++	/**
++	 * When a new slide becomes active, do the following: update state, handle
++	 * page progress (if applicable), handle the display and state of the footer
++	 * slide control buttons, scroll to top and autofocus (if applicable).
++	 *
++	 * @param {HTMLElement} slide
++	 * @param {number} index
++	 * @param {boolean} fromInit
++	 */
++	hasNewActiveSlide = (slide, index, fromInit) => {
++		const instance = this;
++
++		// Update state
++		instance.state.slideData.currentIndex = index;
++
++		// Handle page progress (if applicable)
++		const pageProgress = instance.container.querySelector(".fmd-page-progress");
++		let slidePageProgress;
++		if (slide.hasAttribute("data-fmd-page-progress")) {
++			slidePageProgress = slide.getAttribute("data-fmd-page-progress");
++		} else if (slide.classList.contains("fmd-first-slide")) {
++			slidePageProgress = "0%";
++		} else if (slide.classList.contains("fmd-end-slide")) {
++			slidePageProgress = "100%";
++		}
++		if (
++			pageProgress &&
++			slidePageProgress !== undefined &&
++			instance.state.settings["page-progress"] !== "decorative"
++		) {
++			const localization = instance.state.settings.localization;
++			pageProgress.setAttribute("role", "progressbar");
++			pageProgress.setAttribute(
++				"aria-label",
++				getTranslation(localization, "page-progress"),
++			);
++			pageProgress.setAttribute("aria-valuemin", "0");
++			pageProgress.setAttribute("aria-valuemax", "100");
++			pageProgress.setAttribute(
++				"aria-valuenow",
++				slidePageProgress.replace("%", ""),
++			);
++			pageProgress
++				.querySelector(".fmd-progress-bar")
++				.setAttribute("style", `width: ${slidePageProgress}`);
++		}
++
++		// The timeout makes sure that the slide animation has completed
++		setTimeout(function () {
++			// Scroll
++			if (instance.options.isFullPage) {
++				window.scroll({ top: 0 });
++			} else {
++				instance.container.scroll({ top: 0 });
++
++				// Scroll into view if no part of the container is within the viewport
++				const rect = instance.container.getBoundingClientRect();
++				if (!fromInit && !(rect.top < window.innerHeight && rect.bottom > 0)) {
++					instance.container.scrollIntoView();
++				}
++			}
++
++			// Handle the display and state of the footer slide control buttons
++			const footerBtnGroup = instance.container.querySelector(
++				".fmd-footer .fmd-btn-group",
++			);
++			if (footerBtnGroup) {
++				const footerPreviousBtn =
++					footerBtnGroup.querySelector(".fmd-previous-btn");
++				const footerNextBtn = footerBtnGroup.querySelector(".fmd-next-btn");
++
++				// Reset first
++				footerBtnGroup.classList.remove("fmd-d-none");
++				footerPreviousBtn.disabled = false;
++				footerNextBtn.disabled = false;
++
++				// Disable previous button for first slide
++				// Hide both for end slide
++				if (slide.classList.contains("fmd-first-slide")) {
++					footerPreviousBtn.disabled = true;
++				} else if (slide.classList.contains("fmd-end-slide")) {
++					footerBtnGroup.classList.add("fmd-d-none");
++				}
++
++				// Also disable previous button if slide contains the specific attribute
++				if (slide.hasAttribute("data-fmd-disable-prev-btn")) {
++					footerPreviousBtn.disabled = true;
++				}
++			}
++
++			// Autofocus (if applicable)
++			if (!fromInit || (fromInit && instance.options.isFullPage)) {
++				if (instance.state.settings.autofocus === "all-slides") {
++					const elemToAutofocus = slide.querySelector(
++						"input.fmd-form-str-input, textarea.fmd-form-str-input, input.fmd-form-num-input, select.fmd-form-str-select, input.fmd-form-str-check-input, input.fmd-form-num-check-input, input.fmd-form-datetime-input, input.fmd-form-file-input",
++					);
++					if (elemToAutofocus) {
++						elemToAutofocus.focus();
++					}
++				} else {
++					const elemToAutofocus = slide.querySelector("[data-fmd-autofocus]");
++					if (elemToAutofocus) {
++						elemToAutofocus.focus();
++					}
++				}
++			}
++
++			// Set heights of <textarea> elements (in case of default values)
++			slide
++				.querySelectorAll("textarea.fmd-form-str-input")
++				.forEach((textarea) => {
++					instance.setTextareaHeight(textarea);
++				});
++		}, instance.getSlideTransitionDuration() * 2);
++	};
++
++	/**
++	 * Fade out active slide and fade in next slide. The timeouts make sure that
++	 * the animations work properly.
++	 *
++	 * @param {HTMLElement} activeSlide
++	 * @param {HTMLElement} nextSlide
++	 */
++	fadeInNextSlide = (activeSlide, nextSlide) => {
++		const instance = this;
++
++		const rootElem = instance.container.querySelector(".fmd-root");
++		rootElem.classList.add("fmd-during-slide-transition");
++		activeSlide.classList.add("fmd-fade-out-to-top");
++		setTimeout(function () {
++			activeSlide.classList.remove("fmd-slide-active");
++			nextSlide.classList.add("fmd-fade-in-from-bottom");
++			nextSlide.classList.add("fmd-slide-active");
++			setTimeout(function () {
++				nextSlide.classList.remove("fmd-fade-in-from-bottom");
++				activeSlide.classList.remove("fmd-fade-out-to-top");
++				setTimeout(function () {
++					rootElem.classList.remove("fmd-during-slide-transition");
++
++					// RESET BUTTON PROCESSING STATE AFTER TRANSITION COMPLETES
++					// This ensures the new slide starts with clean, enabled buttons
++					instance.resetButtonProcessingState();
++				}, instance.getSlideTransitionDuration());
++			}, instance.getSlideTransitionDuration());
++		}, instance.getSlideTransitionDuration());
++	};
++
++	/**
++	 * Fade out active slide and fade in previous slide. The timeouts make sure
++	 * that the animations work properly.
++	 *
++	 * @param {HTMLElement} activeSlide
++	 * @param {HTMLElement} prevSlide
++	 */
++	fadeInPrevSlide = (activeSlide, prevSlide) => {
++		const instance = this;
++
++		const rootElem = instance.container.querySelector(".fmd-root");
++		rootElem.classList.add("fmd-during-slide-transition");
++		activeSlide.classList.add("fmd-fade-out-to-bottom");
+ 		setTimeout(function () {
+ 			activeSlide.classList.remove("fmd-slide-active");
+ 			prevSlide.classList.add("fmd-fade-in-from-top");
+@@ -2346,6 +3780,10 @@ class Formsmd {
+ 				activeSlide.classList.remove("fmd-fade-out-to-bottom");
+ 				setTimeout(function () {
+ 					rootElem.classList.remove("fmd-during-slide-transition");
++
++					// RESET BUTTON PROCESSING STATE AFTER TRANSITION COMPLETES
++					// This ensures the restored slide starts with clean, enabled buttons
++					instance.resetButtonProcessingState();
+ 				}, instance.getSlideTransitionDuration());
+ 			}, instance.getSlideTransitionDuration());
+ 		}, instance.getSlideTransitionDuration());
+@@ -2417,6 +3855,7 @@ class Formsmd {
+ 		const ctaBtn =
+ 			activeSlide.querySelector(".fmd-submit-btn") ||
+ 			activeSlide.querySelector(".fmd-next-btn");
++
+ 		instance.setBtnProcessing(ctaBtn);
+ 		const footerPreviousBtn = instance.container.querySelector(
+ 			".fmd-footer .fmd-previous-btn",
+@@ -2452,48 +3891,137 @@ class Formsmd {
+ 			instance.removeSlideErrors(activeSlide);
+ 		}
+ 
+-		// Get the next slide
+-		// If it is the same as the active slide, add (and show) error
+-		const nextSlideAndIndex = instance.getNextSlide();
+-		if (activeSlide === nextSlideAndIndex.slide) {
+-			// Add error
+-			instance.addSlideError(activeSlide, ctaBtn, []);
++		// Get current form data for submission
++		const currentFormData = instance.getCurrentFormData(
++			activeSlide,
++			instance.state.currentQuestion,
++		);
+ 
+-			// Remove all buttons from their processing states
+-			instance.container
+-				.querySelectorAll(".fmd-btn-processing")
+-				.forEach((btn) => {
+-					instance.removeBtnProcessing(btn);
+-				});
++		// Store user response in lifecycle state
++		if (currentFormData && instance.state.currentQuestion) {
++			instance.state.lifecycle.userResponses.set(
++				instance.state.currentQuestion.questionId,
++				currentFormData,
++			);
++		}
+ 
+-			// Enable all clicks on root element
+-			rootElem.removeEventListener("click", instance.disableAllClicks, true);
++		// Get the next question from API
++		instance
++			.getNextQuestionFromAPI(currentFormData)
++			.then((nextSlideData) => {
++				// Check if we have a next slide definition
++				if (!nextSlideData.slideDefinition) {
++					// No more slides available
++					instance.addSlideError(activeSlide, ctaBtn, []);
++
++					// Remove all buttons from their processing states
++					instance.container
++						.querySelectorAll(".fmd-btn-processing")
++						.forEach((btn) => {
++							instance.removeBtnProcessing(btn);
++						});
+ 
+-			return;
+-		}
++					// Enable all clicks on root element
++					rootElem.removeEventListener(
++						"click",
++						instance.disableAllClicks,
++						true,
++					);
++
++					return;
++				}
++
++				// Detect slide type from API response
++				const slideType = nextSlideData.question.slideType || "question";
++				instance.state.lifecycle.currentSlideType = slideType;
++
++				// Check if this is the last question based on progress data
++				const isLastQuestion =
++					nextSlideData.progress?.isLastQuestion ||
++					nextSlideData.progress?.currentQuestion >=
++						nextSlideData.progress?.totalQuestions;
++
++				// Add to question path if it's a new question (not welcome/end)
++				if (
++					slideType === "question" &&
++					nextSlideData.question &&
++					nextSlideData.question.questionId
++				) {
++					instance.state.lifecycle.questionPath.push(
++						nextSlideData.question.questionId,
++					);
++					instance.state.lifecycle.currentQuestionIndex =
++						instance.state.lifecycle.questionPath.length - 1;
++				}
++
++				// Create the next slide with lifecycle management
++				const nextSlide = instance.createQuestionLifecycle(
++					nextSlideData.question,
++					nextSlideData.slideDefinition,
++					nextSlideData.isEndSlide,
++					slideType,
++				);
++
++				// Update the current question data in state
++				instance.state.currentQuestion = nextSlideData.question;
++				instance.state.lifecycle.currentQuestion = nextSlideData.question;
++
++				// Store progress data from API response
++				instance.state.progress = nextSlideData.progress;
++
++				// Continue with the rest of the process
++				instance.handleNextSlideSuccess(activeSlide, nextSlide, nextSlideData);
++			})
++			.catch((error) => {
++				console.error("❌ Error getting next question:", error);
++
++				// Add error to the slide
++				instance.addSlideError(activeSlide, ctaBtn, [
++					"Failed to load next question. Please try again.",
++				]);
++
++				// Remove all buttons from their processing states
++				instance.container
++					.querySelectorAll(".fmd-btn-processing")
++					.forEach((btn) => {
++						instance.removeBtnProcessing(btn);
++					});
++
++				// Enable all clicks on root element
++				rootElem.removeEventListener("click", instance.disableAllClicks, true);
++			});
++
++		return; // Exit early since we're handling the async flow
++	};
++
++	/**
++	 * Handle successful next slide creation
++	 *
++	 * @param {HTMLElement} activeSlide
++	 * @param {HTMLElement} nextSlide
++	 * @param {Object} nextSlideData
++	 */
++	handleNextSlideSuccess = (activeSlide, nextSlide, nextSlideData) => {
++		const instance = this;
++		const rootElem = instance.container.querySelector(".fmd-root");
+ 
+ 		// POST form data
+ 		const postCondition =
+ 			instance.state.settings.page === "form-slides" &&
+-			(activeSlide.hasAttribute("data-fmd-post") ||
+-				nextSlideAndIndex.slide.classList.contains("fmd-end-slide"))
++			(activeSlide.hasAttribute("data-fmd-post") || nextSlideData.isEndSlide)
+ 				? true
+ 				: false;
+ 		instance
+-			.postFormData(
+-				postCondition,
+-				nextSlideAndIndex.slide.classList.contains("fmd-end-slide"),
+-			)
++			.postFormData(postCondition, nextSlideData.isEndSlide)
+ 			.then((promiseResult) => {
+ 				// Success
+ 				if (promiseResult.ok) {
+ 					// If next slide is the end slide: remove response id, remove form
+ 					// data from local storage, and redirect (if applicable)
+-					if (nextSlideAndIndex.slide.classList.contains("fmd-end-slide")) {
++					if (nextSlideData.isEndSlide) {
+ 						instance.removeResponseId();
+ 						instance.removeSavedFormData();
+-						const redirect =
+-							nextSlideAndIndex.slide.getAttribute("data-fmd-redirect");
++						const redirect = nextSlide.getAttribute("data-fmd-redirect");
+ 						if (redirect) {
+ 							window.location.href = redirect;
+ 							return;
+@@ -2501,12 +4029,12 @@ class Formsmd {
+ 					}
+ 
+ 					// Fade in next slide
+-					instance.fadeInNextSlide(activeSlide, nextSlideAndIndex.slide);
++					instance.fadeInNextSlide(activeSlide, nextSlide);
+ 
+ 					// Handle the new active slide
+ 					instance.hasNewActiveSlide(
+-						nextSlideAndIndex.slide,
+-						nextSlideAndIndex.index,
++						nextSlide,
++						nextSlideData.progress?.currentQuestion || 1,
+ 						false,
+ 					);
+ 				}
+@@ -2522,36 +4050,31 @@ class Formsmd {
+ 					instance.addSlideError(activeSlide, ctaBtn, errorMessages);
+ 				}
+ 
+-				// Remove all buttons from their processing states
+-				instance.container
+-					.querySelectorAll(".fmd-btn-processing")
+-					.forEach((btn) => {
+-						instance.removeBtnProcessing(btn);
+-					});
+-
+-				// Enable all clicks on root element
++				// Button processing state is now reset in fadeInNextSlide after transition completes
+ 				// Call the on completion function if end slide
+-				// Timeout makes sure that the slide animation has completed
+-				setTimeout(function () {
+-					rootElem.removeEventListener(
+-						"click",
+-						instance.disableAllClicks,
+-						true,
+-					);
+-					if (nextSlideAndIndex.slide.classList.contains("fmd-end-slide")) {
++				if (nextSlideData.isEndSlide) {
++					setTimeout(function () {
+ 						instance.onCompletion(promiseResult.json);
+-					}
+-				}, instance.getSlideTransitionDuration() * 3);
++					}, instance.getSlideTransitionDuration() * 3);
++				}
+ 			});
+ 	};
+ 
+ 	/**
+-	 * Go to the previous slide.
++	 * Go to the previous slide using lifecycle management.
+ 	 *
+ 	 * @param {HTMLElement} activeSlide
+ 	 */
+ 	prevSlide = (activeSlide) => {
+ 		const instance = this;
++		const { lifecycle } = instance.state;
++
++		// Check if we can go back
++		const previousIndex = lifecycle.currentQuestionIndex - 1;
++		if (previousIndex < 0) {
++			console.error("Cannot go back - already at first question");
++			return;
++		}
+ 
+ 		// Disable all clicks on root element
+ 		const rootElem = instance.container.querySelector(".fmd-root");
+@@ -2575,13 +4098,8 @@ class Formsmd {
+ 			instance.setBtnProcessing(footerNextBtn);
+ 		}
+ 
+-		// Get the previous slide
+-		// If it is the same as the active slide, log error
+-		const prevSlideAndIndex = instance.getPrevSlide();
+-		if (activeSlide === prevSlideAndIndex.slide) {
+-			// Log error
+-			console.error("Something went wrong. Please try again.");
+-
++		// Use lifecycle navigation
++		instance.navigateToQuestion(previousIndex).then(() => {
+ 			// Remove all buttons from their processing states
+ 			instance.container
+ 				.querySelectorAll(".fmd-btn-processing")
+@@ -2590,33 +4108,11 @@ class Formsmd {
+ 				});
+ 
+ 			// Enable all clicks on root element
+-			rootElem.removeEventListener("click", instance.disableAllClicks, true);
+-
+-			return;
+-		}
+-
+-		// Fade in previous slide
+-		instance.fadeInPrevSlide(activeSlide, prevSlideAndIndex.slide);
+-
+-		// Handle the new active slide
+-		instance.hasNewActiveSlide(
+-			prevSlideAndIndex.slide,
+-			prevSlideAndIndex.index,
+-			false,
+-		);
+-
+-		// Remove all buttons from their processing states
+-		instance.container
+-			.querySelectorAll(".fmd-btn-processing")
+-			.forEach((btn) => {
+-				instance.removeBtnProcessing(btn);
+-			});
+-
+-		// Enable all clicks on root element
+-		// Timeout makes sure that the slide animation has completed
+-		setTimeout(function () {
+-			rootElem.removeEventListener("click", instance.disableAllClicks, true);
+-		}, instance.getSlideTransitionDuration() * 3);
++			// Timeout makes sure that the slide animation has completed
++			setTimeout(function () {
++				rootElem.removeEventListener("click", instance.disableAllClicks, true);
++			}, instance.getSlideTransitionDuration() * 3);
++		});
+ 	};
+ 
+ 	/**
+@@ -2664,6 +4160,11 @@ class Formsmd {
+ 	addEventListeners = (container, fromInit) => {
+ 		const instance = this;
+ 
++		console.log(
++			"🔘 DEBUG: addEventListeners called with container:",
++			container,
++		);
++
+ 		if (fromInit) {
+ 			// Blur header when scrolling over content
+ 			// This is done only for full page (header is always blurred inline)
+@@ -2693,25 +4194,6 @@ class Formsmd {
+ 					btn.addEventListener("click", instance.toggleColorScheme);
+ 				});
+ 
+-			// <form> submit
+-			instance.container.querySelectorAll("form.fmd-slide").forEach((form) => {
+-				form.addEventListener("submit", function (e) {
+-					instance.nextSlide(e.target);
+-				});
+-			});
+-
+-			// Slide next buttons
+-			instance.container
+-				.querySelectorAll(".fmd-slide .fmd-next-btn")
+-				.forEach((btn) => {
+-					btn.addEventListener("click", function (e) {
+-						if (!btn.classList.contains("fmd-btn-processing")) {
+-							const parentSlide = btn.closest(".fmd-slide");
+-							instance.nextSlide(parentSlide);
+-						}
+-					});
+-				});
+-
+ 			// Footer previous button
+ 			instance.container
+ 				.querySelectorAll(".fmd-footer .fmd-previous-btn")
+@@ -2754,6 +4236,96 @@ class Formsmd {
+ 			});
+ 		}
+ 
++		// <form> submit - ALWAYS add these listeners (not just on init)
++		let forms = container.querySelectorAll("form");
++		// If the container itself is a form, include it
++		if (container.tagName === "FORM") {
++			forms = [container, ...forms];
++		}
++
++		forms.forEach((form, index) => {
++			form.addEventListener("submit", function (e) {
++				e.preventDefault();
++
++				instance.nextSlide(e.target);
++			});
++		});
++
++		// Slide next buttons - ALWAYS add these listeners (not just on init)
++		const nextButtons = container.querySelectorAll(".fmd-slide .fmd-next-btn");
++		console.log(
++			"🔘 DEBUG: Found next buttons for event listeners:",
++			nextButtons.length,
++		);
++		nextButtons.forEach((btn, index) => {
++			console.log(
++				`🔘 DEBUG: Adding click listener to next button ${index}:`,
++				btn,
++			);
++			btn.addEventListener("click", function (e) {
++				if (!btn.classList.contains("fmd-btn-processing")) {
++					const parentSlide = btn.closest(".fmd-slide");
++					instance.nextSlide(parentSlide);
++				}
++			});
++		});
++
++		// Welcome screen buttons - use direct API call
++		const welcomeButtons = container.querySelectorAll(".fmd-welcome-btn");
++		console.log(
++			"🔘 DEBUG: Found welcome buttons for event listeners:",
++			welcomeButtons.length,
++		);
++		welcomeButtons.forEach((btn, index) => {
++			console.log(
++				`🔘 DEBUG: Adding click listener to welcome button ${index}:`,
++				btn,
++			);
++			btn.addEventListener("click", async function (e) {
++				// Disable the button to prevent multiple clicks
++				btn.disabled = true;
++
++				// For welcome screens, send current question ID with "started" value
++				const welcomeData = {
++					value: "started",
++					questionId: instance.state.currentQuestion?.questionId,
++				};
++
++				try {
++					// Get next question from API
++					const nextQuestionData =
++						await instance.getNextQuestionFromAPI(welcomeData);
++
++					// Process the response and create next slide
++					if (nextQuestionData.question && nextQuestionData.slideDefinition) {
++						instance.processQuestionResponse(nextQuestionData);
++					} else {
++						console.error("❌ No valid question data received from API");
++						btn.disabled = false; // Re-enable button on error
++					}
++				} catch (error) {
++					console.error("❌ Error getting next question:", error);
++					btn.disabled = false; // Re-enable button on error
++				}
++			});
++		});
++
++		// End screen buttons - ALWAYS add these listeners
++		const endButtons = container.querySelectorAll(".fmd-end-btn");
++		console.log(
++			"🔘 DEBUG: Found end buttons for event listeners:",
++			endButtons.length,
++		);
++		endButtons.forEach((btn, index) => {
++			console.log(
++				`🔘 DEBUG: Adding click listener to end button ${index}:`,
++				btn,
++			);
++			btn.addEventListener("click", function (e) {
++				instance.handleEndNavigation();
++			});
++		});
++
+ 		// Copy buttons
+ 		container.querySelectorAll(".fmd-copy-btn").forEach((btn) => {
+ 			btn.addEventListener("click", instance.copyCode);
+@@ -2862,13 +4434,17 @@ class Formsmd {
+ 		// Set the state to defaults
+ 		instance.setStateToDefaults();
+ 
+-		// Initialize settings
+-		const parsedTemplateAndSettings = parseSettings(instance._template);
+-		instance.template = parsedTemplateAndSettings.template;
+-		instance.state.settings = {
+-			...instance.state.settings,
+-			...parsedTemplateAndSettings.settings,
+-		};
++		// Check if we have API configuration
++		if (instance.options.isApiDriven && instance.options.surveyId) {
++			instance.initializeWithApiConfig({
++				surveyId: instance.options.surveyId,
++				apiBaseUrl: instance.options.apiBaseUrl || "http://localhost:3001",
++			});
++			return; // Skip traditional initialization for API-driven mode
++		} else {
++			// Initialize from API instead of static template
++			instance.initializeFromAPI();
++		}
+ 
+ 		// Add the root and body in case of inline
+ 		if (!instance.options.isFullPage) {
+@@ -3187,6 +4763,239 @@ class Formsmd {
+ 
+ 		instance._init(true);
+ 	};
++
++	/**
++	 * Process question response and create the next slide
++	 *
++	 * @param {Object} questionData - The question data from API
++	 */
++	processQuestionResponse = (questionData) => {
++		const instance = this;
++		const rootElem = instance.container.querySelector(".fmd-root");
++
++		// Check if we have a slide definition
++		if (!questionData.slideDefinition) {
++			console.error("❌ No slide definition in question data");
++			return;
++		}
++
++		// Get the current active slide
++		const activeSlide = instance.container.querySelector(".fmd-slide-active");
++		if (!activeSlide) {
++			console.error("❌ No active slide found");
++			return;
++		}
++
++		// Detect slide type from API response
++		const slideType = questionData.question.slideType || "question";
++		instance.state.lifecycle.currentSlideType = slideType;
++
++		// Add to question path if it's a new question (not welcome/end)
++		if (
++			slideType === "question" &&
++			questionData.question &&
++			questionData.question.questionId
++		) {
++			instance.state.lifecycle.questionPath.push(
++				questionData.question.questionId,
++			);
++			instance.state.lifecycle.currentQuestionIndex =
++				instance.state.lifecycle.questionPath.length - 1;
++		}
++
++		// Create the next slide with lifecycle management
++		const nextSlide = instance.createQuestionLifecycle(
++			questionData.question,
++			questionData.slideDefinition,
++			questionData.isEndSlide,
++			slideType,
++		);
++
++		// Update the current question data in state
++		instance.state.currentQuestion = questionData.question;
++		instance.state.lifecycle.currentQuestion = questionData.question;
++
++		// Use the same fade transition system that works for welcome screens
++		// This ensures consistent fade out/in transitions across all slide types
++		instance.fadeInNextSlide(activeSlide, nextSlide);
++
++		// Handle the new active slide after transition completes
++		setTimeout(() => {
++			instance.hasNewActiveSlide(
++				nextSlide,
++				questionData.progress?.currentQuestion || 1,
++				false,
++			);
++		}, instance.getSlideTransitionDuration() * 3);
++	};
++}
++
++/**
++ * Convert hex color to RGB object
++ * @param {string} hex - Hex color string
++ * @returns {Object|null} RGB object with r, g, b properties or null if invalid
++ */
++function hexToRgb(hex) {
++	const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
++	return result
++		? {
++				r: parseInt(result[1], 16),
++				g: parseInt(result[2], 16),
++				b: parseInt(result[3], 16),
++			}
++		: null;
++}
++
++/**
++ * Fetch survey data from API
++ * @param {string} surveyId - The survey ID
++ * @param {string} apiBaseUrl - The API base URL
++ * @returns {Promise<Object>} Survey data
++ */
++async function fetchSurveyData(surveyId, apiBaseUrl) {
++	try {
++		const response = await fetch(
++			`${apiBaseUrl}/api/public/surveys/${surveyId}`,
++		);
++
++		if (!response.ok) {
++			throw new Error(`HTTP error! status: ${response.status}`);
++		}
++
++		const result = await response.json();
++
++		if (result.success && result.data) {
++			return result.data;
++		}
++
++		throw new Error("Invalid survey API response format");
++	} catch (error) {
++		console.error("❌ Error fetching survey data:", error);
++		throw error;
++	}
++}
++
++/**
++ * Fetch next question from API
++ * @param {string} surveyId - The survey ID
++ * @param {string} apiBaseUrl - The API base URL
++ * @param {Object} currentResponse - Current question response
++ * @returns {Promise<Object>} Next question data
++ */
++async function fetchNextQuestion(surveyId, apiBaseUrl, currentResponse = null) {
++	try {
++		const requestBody = {
++			sessionId: "test-session",
++		};
++
++		// Add current question response if provided
++		if (currentResponse) {
++			requestBody.currentQuestionId = currentResponse.questionId;
++			requestBody.response = {
++				value: currentResponse.value,
++				timeSpent: currentResponse.timeSpent || 0,
++			};
++		}
++
++		const response = await fetch(
++			`${apiBaseUrl}/api/public/surveys/${surveyId}/question`,
++			{
++				method: "POST",
++				headers: {
++					"Content-Type": "application/json",
++				},
++				body: JSON.stringify(requestBody),
++			},
++		);
++
++		if (!response.ok) {
++			throw new Error(`HTTP error! status: ${response.status}`);
++		}
++
++		const result = await response.json();
++
++		if (result.success && result.data) {
++			const { status, question, progress } = result.data;
++
++			if (status === "question" && question) {
++				const slideDefinition = convertAPIQuestionToSlideDefinition(question);
++				const isEndSlide = progress.isLastQuestion;
++
++				return {
++					question: question,
++					slideDefinition: slideDefinition,
++					isEndSlide: isEndSlide,
++					progress: progress,
++				};
++			} else if (status === "completed") {
++				return {
++					question: null,
++					slideDefinition: null,
++					isEndSlide: true,
++					progress: progress,
++				};
++			}
++		}
++
++		throw new Error("Invalid API response format");
++	} catch (error) {
++		console.error("❌ Error fetching next question:", error);
++		throw error;
++	}
++}
++
++/**
++ * Convert API question to slide definition format
++ * @param {Object} question - The question object from API
++ * @returns {string} slide definition in markdown format
++ */
++function convertAPIQuestionToSlideDefinition(question) {
++	// Map API question types to FormsMD field types
++	const fieldTypeMap = {
++		text_input: "TextInput",
++		email_input: "EmailInput",
++		number_input: "NumberInput",
++		choice_input: "ChoiceInput",
++		rating_input: "RatingInput",
++		opinion_scale: "OpinionScale",
++		datetime_input: "DateTimeInput",
++		file_input: "FileInput",
++	};
++
++	const fieldType = fieldTypeMap[question.type] || "TextInput";
++
++	// Build the slide definition
++	let slideDefinition = `\n`;
++
++	// Add progress if available
++	if (question.order) {
++		slideDefinition += `|> ${Math.round((question.order / 5) * 100)}%\n\n`;
++	}
++
++	// Build the field definition
++	slideDefinition += `${question.questionId}${question.required ? "\\*" : ""} = ${fieldType}(\n`;
++	slideDefinition += `| question = ${question.question}\n`;
++
++	// Add field-specific properties
++	if (
++		question.type === "choice_input" &&
++		question.options &&
++		question.options.choices
++	) {
++		const choices = question.options.choices.map((choice) => choice.text);
++		slideDefinition += `| choices = ${choices.join(", ")}\n`;
++	} else if (question.type === "choice_input" && question.choices) {
++		// Fallback for old format
++		slideDefinition += `| choices = ${question.choices.join(", ")}\n`;
++	}
++
++	if (question.description) {
++		slideDefinition += `| description = ${question.description}\n`;
++	}
++
++	slideDefinition += `)\n`;
++
++	return slideDefinition;
+ }
+ 
+ exports.Formsmd = Formsmd;
+diff --git a/src/slides-parse.js b/src/slides-parse.js
+index 0491ed0..fad78ad 100644
+--- a/src/slides-parse.js
++++ b/src/slides-parse.js
+@@ -353,5 +353,110 @@ function parseSlides(
+ 	return slides.join("\n");
+ }
+ 
++/**
++ * Parse slides for lazy loading - returns first slide HTML and stores definitions
++ *
++ * @param {string} template
++ * @param {boolean} isForm
++ * @param {{showRestartBtn: boolean, submitBtnText: string}} btnSettings
++ * @param {string} localization
++ * @param {string} slideDelimiter
++ * @returns {{firstSlideHtml: string, slideDefinitions: Array, endSlideDefinition: string}} first slide HTML and slide definitions
++ */
++function parseSlidesLazy(
++	template,
++	isForm,
++	btnSettings,
++	localization,
++	slideDelimiter,
++) {
++	const slideDefinitions = [];
++	let endSlideDefinition = "";
++	let firstSlideHtml = "";
++
++	// Debug logging
++
++	// Go through each slide
++	const templateSplit = template.split(slideDelimiter);
++
++	for (let i = 0; i < templateSplit.length; i++) {
++		const slide = templateSplit[i];
++		const isFirstSlide = i === 0 ? true : false;
++
++		if (isFirstSlide) {
++			// Parse first slide immediately
++			const parsedSlide = parseSlide(
++				slide,
++				isForm,
++				isFirstSlide,
++				btnSettings,
++				localization,
++			);
++			firstSlideHtml = parsedSlide.template;
++		} else {
++			// Store slide definitions for later rendering
++			slideDefinitions.push(slide);
++		}
++	}
++
++	// Handle end slide definition
++
++	if (slideDefinitions.length > 0) {
++		const lastSlide = slideDefinitions.pop();
++
++		const parsedLastSlide = parseSlide(
++			lastSlide,
++			isForm,
++			false,
++			btnSettings,
++			localization,
++		);
++
++		if (parsedLastSlide.slideType === "end") {
++			endSlideDefinition = lastSlide;
++		} else {
++			// If last slide is not an end slide, add it back
++			slideDefinitions.push(lastSlide);
++
++			// Don't set endSlideDefinition - will use null to trigger default end slide
++		}
++	}
++
++	return {
++		firstSlideHtml: firstSlideHtml,
++		slideDefinitions: slideDefinitions,
++		endSlideDefinition: endSlideDefinition,
++	};
++}
++
++/**
++ * Render a slide from its definition
++ *
++ * @param {string} slideDefinition
++ * @param {boolean} isForm
++ * @param {boolean} isFirstSlide
++ * @param {{showRestartBtn: boolean, submitBtnText: string}} btnSettings
++ * @param {string} localization
++ * @returns {string} slide HTML
++ */
++function renderSlideFromDefinition(
++	slideDefinition,
++	isForm,
++	isFirstSlide,
++	btnSettings,
++	localization,
++) {
++	const parsedSlide = parseSlide(
++		slideDefinition,
++		isForm,
++		isFirstSlide,
++		btnSettings,
++		localization,
++	);
++	return parsedSlide.template;
++}
++
+ exports.parseSlide = parseSlide;
+ exports.parseSlides = parseSlides;
++exports.parseSlidesLazy = parseSlidesLazy;
++exports.renderSlideFromDefinition = renderSlideFromDefinition;
+diff --git a/src/templates-create.js b/src/templates-create.js
+index 49feee0..72c3f19 100644
+--- a/src/templates-create.js
++++ b/src/templates-create.js
+@@ -3,7 +3,11 @@
+ const { addReservedClass } = require("./attrs-parse");
+ const { parseDivs, parseBindSpans } = require("./div-span-parse");
+ const { renderer } = require("./marked-renderer");
+-const { parseSlides } = require("./slides-parse");
++const {
++	parseSlides,
++	parseSlidesLazy,
++	renderSlideFromDefinition,
++} = require("./slides-parse");
+ const { getTranslation } = require("./translations");
+ const createDOMPurify = require("dompurify");
+ const { marked } = require("marked");
+@@ -18,6 +22,220 @@ var nunjucks = require("nunjucks");
+ function createStyles(settings) {
+ 	const styleBlocks = [];
+ 
++	// Add flexbox utility classes
++	styleBlocks.push(`
++		/* Flexbox Utility Classes */
++		.fmd-d-flex {
++			display: flex !important;
++		}
++		
++		.fmd-justify-content-start {
++			justify-content: flex-start !important;
++		}
++		
++		.fmd-justify-content-center {
++			justify-content: center !important;
++		}
++		
++		.fmd-justify-content-end {
++			justify-content: flex-end !important;
++		}
++		
++		.fmd-justify-content-left {
++			justify-content: flex-start !important;
++		}
++		
++		.fmd-justify-content-right {
++			justify-content: flex-end !important;
++		}
++		
++		.fmd-align-items-center {
++			align-items: center !important;
++		}
++		
++		.fmd-ms-2 {
++			margin-left: 0.5rem !important;
++		}
++		
++		.fmd-icon {
++			width: 1em;
++			height: 1em;
++			fill: currentColor;
++		}
++		
++		.fmd-hide-rtl {
++			display: none;
++		}
++		
++		.fmd-hide-ltr {
++			display: none;
++		}
++	`);
++
++	// Add welcome screen styles
++	styleBlocks.push(`
++		/* Welcome Screen Styles */
++		.fmd-welcome-slide {
++			display: flex;
++			align-items: center;
++			justify-content: center;
++			min-height: 60vh;
++		}
++		
++		.fmd-welcome-content {
++			text-align: center;
++			max-width: 640px;
++			width: 100%;
++		}
++		
++		.fmd-welcome-content-left {
++			text-align: left;
++		}
++		
++		.fmd-welcome-content-right {
++			text-align: right;
++		}
++		
++		/* Override form question styles for welcome screen */
++		.fmd-welcome-slide .fmd-welcome-content-center .fmd-welcome-title.fmd-form-question {
++			text-align: center !important;
++		}
++		
++		.fmd-welcome-slide .fmd-welcome-content-center .fmd-welcome-description.fmd-form-description {
++			text-align: center !important;
++		}
++		
++		.fmd-welcome-slide .fmd-welcome-content-left .fmd-welcome-title.fmd-form-question {
++			text-align: left !important;
++		}
++		
++		.fmd-welcome-slide .fmd-welcome-content-left .fmd-welcome-description.fmd-form-description {
++			text-align: left !important;
++		}
++		
++		.fmd-welcome-slide .fmd-welcome-content-right .fmd-welcome-title.fmd-form-question {
++			text-align: right !important;
++		}
++		
++		.fmd-welcome-slide .fmd-welcome-content-right .fmd-welcome-description.fmd-form-description {
++			text-align: right !important;
++		}
++		
++		.fmd-welcome-title {
++			/* Typeform-inspired: More subtle hierarchy */
++			font-size: calc(var(--fmd-font-size-base) + 12px); /* 28px instead of 34px */
++			font-weight: var(--fmd-font-weight-medium); /* 500 instead of 700 */
++			line-height: 1.35; /* 1.35 instead of 1.2 - more comfortable */
++			margin-bottom: 1.25rem; /* 20px instead of 24px - more compact */
++			margin-top: 0;
++			color: var(--fmd-emphasis-color);
++		}
++		
++		.fmd-welcome-description {
++			/* Typeform-inspired: Better body text */
++			font-size: var(--fmd-font-size-lg); /* Keep 18px */
++			line-height: 1.55; /* 1.55 instead of 1.5 - more comfortable reading */
++			margin-bottom: 2rem; /* 32px instead of 40px - less dramatic spacing */
++			color: var(--fmd-body-color);
++			font-weight: var(--fmd-body-font-weight);
++		}
++		
++		.fmd-welcome-btn {
++			/* Typeform-inspired: More refined button */
++			padding: 1rem 2rem; /* 16px 32px instead of 14px 36px */
++			font-size: var(--fmd-font-size-base); /* 16px instead of 18px */
++			font-weight: var(--fmd-font-weight-medium); /* 500 instead of 600 */
++		}
++		
++		/* Responsive adjustments - Typeform-inspired */
++		@media (max-width: 768px) {
++			.fmd-welcome-title {
++				font-size: calc(var(--fmd-font-size-base) + 6px); /* 22px - Typeform mobile title size */
++			}
++			
++			.fmd-welcome-description {
++				font-size: var(--fmd-font-size-base); /* 16px - Typeform mobile description size */
++			}
++			
++			.fmd-welcome-btn {
++				padding: 1rem 2rem; /* 16px 32px - Bigger mobile button */
++				font-size: calc(var(--fmd-font-size-base) + 1px); /* 17px - Bigger mobile text */
++				font-weight: var(--fmd-font-weight-semibold); /* 600 - Bolder text */
++			}
++		}
++	`);
++
++	// Add end slide styling - mirrors welcome screen
++	styleBlocks.push(`
++		/* End slide styling - mirrors welcome screen */
++		.fmd-end-slide .fmd-end-content-center .fmd-end-title.fmd-form-question {
++			text-align: center !important;
++		}
++		
++		.fmd-end-slide .fmd-end-content-center .fmd-end-description.fmd-form-description {
++			text-align: center !important;
++		}
++		
++		.fmd-end-slide .fmd-end-content-left .fmd-end-title.fmd-form-question {
++			text-align: left !important;
++		}
++		
++		.fmd-end-slide .fmd-end-content-left .fmd-end-description.fmd-form-description {
++			text-align: left !important;
++		}
++		
++		.fmd-end-slide .fmd-end-content-right .fmd-end-title.fmd-form-question {
++			text-align: right !important;
++		}
++		
++		.fmd-end-slide .fmd-end-content-right .fmd-end-description.fmd-form-description {
++			text-align: right !important;
++		}
++		
++		.fmd-end-title {
++			/* Typeform-inspired: More subtle hierarchy */
++			font-size: calc(var(--fmd-font-size-base) + 12px); /* 28px instead of 34px */
++			font-weight: var(--fmd-font-weight-medium); /* 500 instead of 700 */
++			line-height: 1.35; /* 1.35 instead of 1.2 - more comfortable */
++			margin-bottom: 1.25rem; /* 20px instead of 24px - more compact */
++			margin-top: 0;
++			color: var(--fmd-emphasis-color);
++		}
++		
++		.fmd-end-description {
++			/* Typeform-inspired: Better body text */
++			font-size: var(--fmd-font-size-lg); /* Keep 18px */
++			line-height: 1.55; /* 1.55 instead of 1.5 - more comfortable reading */
++			margin-bottom: 2rem; /* 32px instead of 40px - less dramatic spacing */
++			color: var(--fmd-body-color);
++			font-weight: var(--fmd-body-font-weight);
++		}
++		
++		.fmd-end-btn {
++			/* Typeform-inspired: More refined button */
++			padding: 1rem 2rem; /* 16px 32px instead of 14px 36px */
++			font-size: var(--fmd-font-size-base); /* 16px instead of 18px */
++			font-weight: var(--fmd-font-weight-medium); /* 500 instead of 600 */
++		}
++		
++		/* Responsive adjustments - Typeform-inspired */
++		@media (max-width: 768px) {
++			.fmd-end-title {
++				font-size: calc(var(--fmd-font-size-base) + 6px); /* 22px - Typeform mobile title size */
++			}
++			
++			.fmd-end-description {
++				font-size: var(--fmd-font-size-base); /* 16px - Typeform mobile description size */
++			}
++			
++			.fmd-end-btn {
++				padding: 1rem 2rem; /* 16px 32px - Bigger mobile button */
++				font-size: calc(var(--fmd-font-size-base) + 1px); /* 17px - Bigger mobile text */
++				font-weight: var(--fmd-font-weight-semibold); /* 600 - Bolder text */
++			}
++		}
++	`);
++
+ 	// Add the font import URL
+ 	if (settings["font-import-url"] !== undefined) {
+ 		styleBlocks.push(`@import url("${settings["font-import-url"]}");`);
+@@ -322,7 +540,8 @@ function createContentTemplate(template, settings, data, windowAndSanitize) {
+ 
+ 	// Parse slides
+ 	if (settings.page !== "single") {
+-		template = parseSlides(
++		// Use lazy loading - only parse first slide and store definitions
++		const lazyResult = parseSlidesLazy(
+ 			template,
+ 			settings.page === "form-slides" ? true : false,
+ 			{
+@@ -335,6 +554,13 @@ function createContentTemplate(template, settings, data, windowAndSanitize) {
+ 			settings.localization,
+ 			settings["slide-delimiter"],
+ 		);
++
++		// Store slide definitions in settings for later use
++		settings.slideDefinitions = lazyResult.slideDefinitions;
++		settings.endSlideDefinition = lazyResult.endSlideDefinition;
++
++		// Use only the first slide HTML
++		template = lazyResult.firstSlideHtml;
+ 	} else {
+ 		template = [
+ 			`<div class="fmd-single">`,
+diff --git a/src/translations.js b/src/translations.js
+index b927bac..5f0b6e4 100644
+--- a/src/translations.js
++++ b/src/translations.js
+@@ -44,6 +44,9 @@ const translations = {
+ 		"star-plural": "stars",
+ 		"star-singular": "star",
+ 		"start-btn": "Start",
++		"start-survey-btn": "Start Survey",
++		"create-survey-btn": "Create a Survey",
++		"redirecting-message": "Redirecting in a few seconds...",
+ 		"text-input-placeholder": "Type your answer here...",
+ 		"textarea-new-line-text": "to add new line",
+ 		"time-input-error": "Please use the HH:mm format.",
+@@ -93,6 +96,7 @@ const translations = {
+ 		"star-plural": "نجوم",
+ 		"star-singular": "نجمة",
+ 		"start-btn": "ابدأ",
++		"start-survey-btn": "بدء الاستطلاع",
+ 		"text-input-placeholder": "اكتب إجابتك هنا...",
+ 		"textarea-new-line-text": "لإضافة سطر جديد",
+ 		"time-input-error": "الرجاء استخدام التنسيق HH:mm.",
+@@ -143,6 +147,7 @@ const translations = {
+ 		"star-plural": "স্টার",
+ 		"star-singular": "স্টার",
+ 		"start-btn": "শুরু",
++		"start-survey-btn": "প্রশ্নবিজ্ঞান শুরু করুন",
+ 		"text-input-placeholder": "এখানে আপনার উত্তর টাইপ করুন...",
+ 		"textarea-new-line-text": "নতুন লাইন যোগ করতে",
+ 		"time-input-error": "অনুগ্রহ করে HH:mm ফর্ম্যাট ব্যবহার করুন।",
+@@ -193,6 +198,7 @@ const translations = {
+ 		"star-plural": "Sterne",
+ 		"star-singular": "Stern",
+ 		"start-btn": "Start",
++		"start-survey-btn": "Umfrage starten",
+ 		"text-input-placeholder": "Geben Sie hier Ihre Antwort ein...",
+ 		"textarea-new-line-text": "um neue Zeile hinzuzufügen",
+ 		"time-input-error": "Bitte verwenden Sie das Format HH:mm.",
+@@ -243,6 +249,7 @@ const translations = {
+ 		"star-plural": "estrellas",
+ 		"star-singular": "estrella",
+ 		"start-btn": "Comenzar",
++		"start-survey-btn": "Iniciar encuesta",
+ 		"text-input-placeholder": "Escribe tu respuesta aquí...",
+ 		"textarea-new-line-text": "para añadir una nueva línea",
+ 		"time-input-error": "Utilice el formato HH:mm.",
+@@ -293,6 +300,7 @@ const translations = {
+ 		"star-plural": "étoiles",
+ 		"star-singular": "étoile",
+ 		"start-btn": "Commencer",
++		"start-survey-btn": "Démarrer l'enquête",
+ 		"text-input-placeholder": "Tapez votre réponse ici...",
+ 		"textarea-new-line-text": "pour ajouter une nouvelle ligne",
+ 		"time-input-error": "Veuillez utiliser le format HH:mm.",
+@@ -342,6 +350,7 @@ const translations = {
+ 		"star-plural": "星",
+ 		"star-singular": "星",
+ 		"start-btn": "開始",
++		"start-survey-btn": "アンケートを開始",
+ 		"text-input-placeholder": "ここに回答を入力してください...",
+ 		"textarea-new-line-text": "改行するには",
+ 		"time-input-error": "HH:mm形式で入力してください。",
+@@ -391,6 +400,7 @@ const translations = {
+ 		"star-plural": "estrelas",
+ 		"star-singular": "estrela",
+ 		"start-btn": "Começar",
++		"start-survey-btn": "Iniciar enquête",
+ 		"text-input-placeholder": "Digite sua resposta aqui...",
+ 		"textarea-new-line-text": "para adicionar nova linha",
+ 		"time-input-error": "Por favor use o formato HH:mm.",
+@@ -440,6 +450,7 @@ const translations = {
+ 		"star-plural": "星",
+ 		"star-singular": "星",
+ 		"start-btn": "开始",
++		"start-survey-btn": "开始问卷",
+ 		"text-input-placeholder": "在此输入您的答案...",
+ 		"textarea-new-line-text": "添加新行",
+ 		"time-input-error": "请使用 HH:mm 格式。",
+diff --git a/src/welcome-screen-template.js b/src/welcome-screen-template.js
+new file mode 100644
+index 0000000..bc88332
+--- /dev/null
++++ b/src/welcome-screen-template.js
+@@ -0,0 +1,83 @@
++"use strict";
++
++const { getTranslation } = require("./translations");
++var nunjucks = require("nunjucks");
++
++/**
++ * Welcome screen template with alignment options
++ * Supports left, center (default), and right alignment
++ */
++const welcomeScreenTemplate = `
++<div
++	class="fmd-slide fmd-first-slide fmd-welcome-slide"
++	data-fmd-page-progress="0%"
++>
++	<div class="fmd-grid" style="text-align: {{ alignment }};">
++		<div class="fmd-welcome-content">
++			{% if title %}
++			<h1 class="fmd-welcome-title fmd-form-question">
++				{{ title | safe }}
++			</h1>
++			{% endif %}
++			
++			{% if content %}
++			<div class="fmd-welcome-description fmd-form-description">
++				{{ content | safe }}
++			</div>
++			{% endif %}
++		</div>
++		
++		{% if buttonText %}
++		<div class="fmd-next-controls fmd-d-flex" style="justify-content: {% if alignment == 'left' %}flex-start{% elif alignment == 'right' %}flex-end{% else %}center{% endif %};">
++			<button type="button" class="fmd-welcome-btn fmd-btn fmd-btn-accent fmd-d-flex fmd-align-items-center fmd-justify-content-center">
++				{{ buttonText }}
++				<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512" class="fmd-icon fmd-ms-2 fmd-hide-rtl" aria-hidden="true" focusable="false"><path d="M273 239c9.4 9.4 9.4 24.6 0 33.9L113 433c9.4 9.4-24.6 9.4-33.9 0s-9.4-24.6 0-33.9l143-143L79 113c9.4-9.4-9.4-24.6 0-33.9s24.6-9.4 33.9 0L273 239z"/></svg>
++				<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512" class="fmd-icon fmd-ms-2 fmd-hide-ltr" aria-hidden="true" focusable="false"><path d="M47 239c9.4 9.4 9.4 24.6 0 33.9L207 433c9.4 9.4 24.6 9.4 33.9 0s9.4-24.6 0-33.9L97.9 256 241 113c9.4-9.4 9.4-24.6 0-33.9s-24.6-9.4-33.9 0L47 239z"/></svg>
++			</button>
++		</div>
++		{% endif %}
++	</div>
++</div>
++`;
++
++/**
++ * Create a welcome screen slide
++ *
++ * @param {Object} config - Welcome screen configuration
++ * @param {string} config.title - Welcome screen title
++ * @param {string} config.content - Welcome screen content/description
++ * @param {string} config.buttonText - CTA button text
++ * @param {string} config.alignment - Text alignment: "left", "center", or "right" (default: "center")
++ * @param {string} localization - Localization setting
++ * @returns {string} Welcome screen HTML
++ */
++function createWelcomeScreen(config, localization) {
++	// Set default alignment to center if not specified
++	let alignment = config.alignment || "center";
++
++	// Validate alignment value
++	const validAlignments = ["left", "center", "right"];
++	if (!validAlignments.includes(alignment)) {
++		console.warn(
++			`[WELCOME-SCREEN] Invalid alignment "${alignment}". Using "center" instead.`,
++		);
++		alignment = "center";
++	}
++
++	// Use Nunjucks to render the template
++	nunjucks.configure({ autoescape: false });
++	return nunjucks.renderString(welcomeScreenTemplate, {
++		title: config.title || "",
++		content: config.content || "",
++		buttonText:
++			config.buttonText || getTranslation(localization, "start-survey-btn"),
++		alignment: alignment,
++		translations: {
++			startSurveyBtn: getTranslation(localization, "start-survey-btn"),
++		},
++	});
++}
++
++module.exports = {
++	createWelcomeScreen,
++};
+diff --git a/tests/getCurrentFormData.test.js b/tests/getCurrentFormData.test.js
+new file mode 100644
+index 0000000..5473c39
+--- /dev/null
++++ b/tests/getCurrentFormData.test.js
+@@ -0,0 +1,389 @@
++const { Formsmd } = require("../src/main");
++
++describe("getCurrentFormData", () => {
++	let formsmd;
++	let container;
++
++	beforeEach(() => {
++		// Create a container element
++		container = document.createElement("div");
++		document.body.appendChild(container);
++
++		// Create minimal template
++		const template = `
++			#! title = Test form
++			#! color-scheme = light
++			
++			# Test Form
++			
++			This is a test form.
++		`;
++
++		// Initialize Formsmd
++		formsmd = new Formsmd(template, container, {
++			colorScheme: "light",
++			isFullPage: false,
++			sanitize: true,
++		});
++
++		// Set up the DOM structure for testing
++		container.innerHTML = `
++			<div class="fmd-root">
++				<div class="fmd-main">
++					<div class="fmd-main-container">
++						<div class="fmd-slide fmd-slide-active">
++							<!-- Test content will be added here -->
++						</div>
++					</div>
++				</div>
++			</div>
++		`;
++	});
++
++	afterEach(() => {
++		// Clean up
++		container.remove();
++	});
++
++	describe("Choice Input (Radio) - Single Selection", () => {
++		it("should extract single selected radio button value", () => {
++			// Create a slide with radio buttons
++			const activeSlide = container.querySelector(".fmd-slide");
++			activeSlide.innerHTML = `
++				<fieldset data-fmd-name="test-question" data-fmd-type="radio">
++					<legend>What is your age group?</legend>
++					<div class="fmd-form-check">
++						<input type="radio" name="test-question" value="18-25" class="fmd-form-str-check-input">
++						<label>18-25</label>
++					</div>
++					<div class="fmd-form-check">
++						<input type="radio" name="test-question" value="26-35" class="fmd-form-str-check-input" checked>
++						<label>26-35</label>
++					</div>
++					<div class="fmd-form-check">
++						<input type="radio" name="test-question" value="36-45" class="fmd-form-str-check-input">
++						<label>36-45</label>
++					</div>
++				</fieldset>
++			`;
++
++			const originalQuestion = {
++				questionId: "test-question",
++				type: "choice_input",
++				options: {
++					multiple: false,
++					choices: [
++						{ id: "1", text: "18-25", value: "18-25" },
++						{ id: "2", text: "26-35", value: "26-35" },
++						{ id: "3", text: "36-45", value: "36-45" },
++					],
++				},
++			};
++
++			const result = formsmd.getCurrentFormData(activeSlide, originalQuestion);
++
++			expect(result).toBeDefined();
++			expect(result.questionId).toBe("test-question");
++			expect(result.value).toBe("26-35");
++			expect(result.timeSpent).toBeGreaterThan(0);
++		});
++
++		it("should return empty string when no radio button is selected", () => {
++			// Create a slide with radio buttons (none selected)
++			const activeSlide = container.querySelector(".fmd-slide");
++			activeSlide.innerHTML = `
++				<fieldset data-fmd-name="test-question" data-fmd-type="radio">
++					<legend>What is your age group?</legend>
++					<div class="fmd-form-check">
++						<input type="radio" name="test-question" value="18-25" class="fmd-form-str-check-input">
++						<label>18-25</label>
++					</div>
++					<div class="fmd-form-check">
++						<input type="radio" name="test-question" value="26-35" class="fmd-form-str-check-input">
++						<label>26-35</label>
++					</div>
++				</fieldset>
++			`;
++
++			const originalQuestion = {
++				questionId: "test-question",
++				type: "choice_input",
++				options: {
++					multiple: false,
++					choices: [
++						{ id: "1", text: "18-25", value: "18-25" },
++						{ id: "2", text: "26-35", value: "26-35" },
++					],
++				},
++			};
++
++			const result = formsmd.getCurrentFormData(activeSlide, originalQuestion);
++
++			expect(result).toBeDefined();
++			expect(result.questionId).toBe("test-question");
++			expect(result.value).toBe("");
++		});
++	});
++
++	describe("Choice Input (Checkbox) - Multiple Selection", () => {
++		it("should extract multiple selected checkbox values as array", () => {
++			// Create a slide with checkboxes
++			const activeSlide = container.querySelector(".fmd-slide");
++			activeSlide.innerHTML = `
++				<fieldset data-fmd-name="test-question" data-fmd-type="checkbox">
++					<legend>What are your interests?</legend>
++					<div class="fmd-form-check">
++						<input type="checkbox" name="test-question" value="sports" class="fmd-form-str-check-input" checked>
++						<label>Sports</label>
++					</div>
++					<div class="fmd-form-check">
++						<input type="checkbox" name="test-question" value="music" class="fmd-form-str-check-input">
++						<label>Music</label>
++					</div>
++					<div class="fmd-form-check">
++						<input type="checkbox" name="test-question" value="reading" class="fmd-form-str-check-input" checked>
++						<label>Reading</label>
++					</div>
++				</fieldset>
++			`;
++
++			const originalQuestion = {
++				questionId: "test-question",
++				type: "choice_input",
++				options: {
++					multiple: true,
++					choices: [
++						{ id: "1", text: "Sports", value: "sports" },
++						{ id: "2", text: "Music", value: "music" },
++						{ id: "3", text: "Reading", value: "reading" },
++					],
++				},
++			};
++
++			const result = formsmd.getCurrentFormData(activeSlide, originalQuestion);
++
++			expect(result).toBeDefined();
++			expect(result.questionId).toBe("test-question");
++			expect(Array.isArray(result.value)).toBe(true);
++			expect(result.value).toContain("sports");
++			expect(result.value).toContain("reading");
++			expect(result.value).not.toContain("music");
++			expect(result.value.length).toBe(2);
++		});
++
++		it("should return empty array when no checkbox is selected", () => {
++			// Create a slide with checkboxes (none selected)
++			const activeSlide = container.querySelector(".fmd-slide");
++			activeSlide.innerHTML = `
++				<fieldset data-fmd-name="test-question" data-fmd-type="checkbox">
++					<legend>What are your interests?</legend>
++					<div class="fmd-form-check">
++						<input type="checkbox" name="test-question" value="sports" class="fmd-form-str-check-input">
++						<label>Sports</label>
++					</div>
++					<div class="fmd-form-check">
++						<input type="checkbox" name="test-question" value="music" class="fmd-form-str-check-input">
++						<label>Music</label>
++					</div>
++				</fieldset>
++			`;
++
++			const originalQuestion = {
++				questionId: "test-question",
++				type: "choice_input",
++				options: {
++					multiple: true,
++					choices: [
++						{ id: "1", text: "Sports", value: "sports" },
++						{ id: "2", text: "Music", value: "music" },
++					],
++				},
++			};
++
++			const result = formsmd.getCurrentFormData(activeSlide, originalQuestion);
++
++			expect(result).toBeDefined();
++			expect(result.questionId).toBe("test-question");
++			expect(Array.isArray(result.value)).toBe(true);
++			expect(result.value.length).toBe(0);
++		});
++	});
++
++	describe("Text Input", () => {
++		it("should extract text input value", () => {
++			// Create a slide with text input
++			const activeSlide = container.querySelector(".fmd-slide");
++			activeSlide.innerHTML = `
++				<div data-fmd-name="test-question">
++					<label>What is your name?</label>
++					<input type="text" name="test-question" value="John Doe" class="fmd-form-str-input">
++				</div>
++			`;
++
++			const originalQuestion = {
++				questionId: "test-question",
++				type: "text_input",
++			};
++
++			const result = formsmd.getCurrentFormData(activeSlide, originalQuestion);
++
++			expect(result).toBeDefined();
++			expect(result.questionId).toBe("test-question");
++			expect(result.value).toBe("John Doe");
++		});
++
++		it("should extract textarea value", () => {
++			// Create a slide with textarea
++			const activeSlide = container.querySelector(".fmd-slide");
++			activeSlide.innerHTML = `
++				<div data-fmd-name="test-question">
++					<label>Tell us about yourself:</label>
++					<textarea name="test-question" class="fmd-form-str-input">I am a developer</textarea>
++				</div>
++			`;
++
++			const originalQuestion = {
++				questionId: "test-question",
++				type: "text_input",
++			};
++
++			const result = formsmd.getCurrentFormData(activeSlide, originalQuestion);
++
++			expect(result).toBeDefined();
++			expect(result.questionId).toBe("test-question");
++			expect(result.value).toBe("I am a developer");
++		});
++	});
++
++	describe("Number Input", () => {
++		it("should extract number input value as number", () => {
++			// Create a slide with number input
++			const activeSlide = container.querySelector(".fmd-slide");
++			activeSlide.innerHTML = `
++				<div data-fmd-name="test-question">
++					<label>What is your age?</label>
++					<input type="number" name="test-question" value="25" class="fmd-form-num-input">
++				</div>
++			`;
++
++			const originalQuestion = {
++				questionId: "test-question",
++				type: "number_input",
++			};
++
++			const result = formsmd.getCurrentFormData(activeSlide, originalQuestion);
++
++			expect(result).toBeDefined();
++			expect(result.questionId).toBe("test-question");
++			expect(result.value).toBe(25);
++		});
++
++		it("should return null for empty number input", () => {
++			// Create a slide with empty number input
++			const activeSlide = container.querySelector(".fmd-slide");
++			activeSlide.innerHTML = `
++				<div data-fmd-name="test-question">
++					<label>What is your age?</label>
++					<input type="number" name="test-question" value="" class="fmd-form-num-input">
++				</div>
++			`;
++
++			const originalQuestion = {
++				questionId: "test-question",
++				type: "number_input",
++			};
++
++			const result = formsmd.getCurrentFormData(activeSlide, originalQuestion);
++
++			expect(result).toBeDefined();
++			expect(result.questionId).toBe("test-question");
++			expect(result.value).toBeNull();
++		});
++	});
++
++	describe("Rating Input", () => {
++		it("should extract rating input value as number", () => {
++			// Create a slide with rating input
++			const activeSlide = container.querySelector(".fmd-slide");
++			activeSlide.innerHTML = `
++				<fieldset data-fmd-name="test-question" data-fmd-type="num-radio">
++					<legend>Rate your experience:</legend>
++					<input type="radio" name="test-question" value="1" class="fmd-form-num-check-input">
++					<input type="radio" name="test-question" value="2" class="fmd-form-num-check-input">
++					<input type="radio" name="test-question" value="3" class="fmd-form-num-check-input" checked>
++					<input type="radio" name="test-question" value="4" class="fmd-form-num-check-input">
++					<input type="radio" name="test-question" value="5" class="fmd-form-num-check-input">
++				</fieldset>
++			`;
++
++			const originalQuestion = {
++				questionId: "test-question",
++				type: "rating_input",
++			};
++
++			const result = formsmd.getCurrentFormData(activeSlide, originalQuestion);
++
++			expect(result).toBeDefined();
++			expect(result.questionId).toBe("test-question");
++			expect(result.value).toBe(3);
++		});
++	});
++
++	describe("Fallback to DOM-based type detection", () => {
++		it("should detect choice input type from DOM when original question is not provided", () => {
++			// Create a slide with radio buttons
++			const activeSlide = container.querySelector(".fmd-slide");
++			activeSlide.innerHTML = `
++				<fieldset data-fmd-name="test-question" data-fmd-type="radio">
++					<legend>What is your age group?</legend>
++					<div class="fmd-form-check">
++						<input type="radio" name="test-question" value="18-25" class="fmd-form-str-check-input" checked>
++						<label>18-25</label>
++					</div>
++				</fieldset>
++			`;
++
++			// Don't provide originalQuestion to test DOM-based detection
++			const result = formsmd.getCurrentFormData(activeSlide, null);
++
++			expect(result).toBeDefined();
++			expect(result.questionId).toBe("test-question");
++			expect(result.value).toBe("18-25");
++		});
++
++		it("should detect text input type from DOM when original question is not provided", () => {
++			// Create a slide with text input
++			const activeSlide = container.querySelector(".fmd-slide");
++			activeSlide.innerHTML = `
++				<div data-fmd-name="test-question">
++					<label>What is your name?</label>
++					<input type="text" name="test-question" value="John Doe" class="fmd-form-str-input">
++				</div>
++			`;
++
++			// Don't provide originalQuestion to test DOM-based detection
++			const result = formsmd.getCurrentFormData(activeSlide, null);
++
++			expect(result).toBeDefined();
++			expect(result.questionId).toBe("test-question");
++			expect(result.value).toBe("John Doe");
++		});
++	});
++
++	describe("Error handling", () => {
++		it("should return null when no form field is found", () => {
++			// Create a slide without any form fields
++			const activeSlide = container.querySelector(".fmd-slide");
++			activeSlide.innerHTML = `
++				<div>
++					<h1>Welcome to the survey</h1>
++					<p>No form fields here</p>
++				</div>
++			`;
++
++			const result = formsmd.getCurrentFormData(activeSlide, null);
++
++			expect(result).toBeNull();
++		});
++	});
++});
+diff --git a/types/end-slide-template.d.ts b/types/end-slide-template.d.ts
+new file mode 100644
+index 0000000..3b05383
+--- /dev/null
++++ b/types/end-slide-template.d.ts
+@@ -0,0 +1,24 @@
++/**
++ * Create an end slide
++ *
++ * @param {Object} config - End slide configuration
++ * @param {string} config.title - End slide title
++ * @param {string} config.content - End slide content/description
++ * @param {string} config.buttonText - CTA button text (optional if redirectUrl is provided)
++ * @param {string} config.alignment - Text alignment: "left", "center", or "right" (default: "center")
++ * @param {string} config.redirectUrl - Optional redirect URL (if provided, button is hidden)
++ * @param {number} config.redirectDelay - Redirect delay in milliseconds (default: 3000)
++ * @param {string} localization - Localization setting
++ * @returns {string} End slide HTML
++ */
++export function createEndSlide(
++	config: {
++		title: string;
++		content: string;
++		buttonText: string;
++		alignment: string;
++		redirectUrl: string;
++		redirectDelay: number;
++	},
++	localization: string,
++): string;
+diff --git a/types/main.d.ts b/types/main.d.ts
+index e37d21b..7e9c74c 100644
+--- a/types/main.d.ts
++++ b/types/main.d.ts
+@@ -255,6 +255,21 @@ export class Formsmd {
+ 		settings: any;
+ 		slideData: {
+ 			currentIndex: number;
++			slideDefinitions: any[];
++			endSlideDefinition: string;
++			availableSlides: number;
++		};
++		lifecycle: {
++			questionCache: Map<any, any>;
++			questionPath: any[];
++			userResponses: Map<any, any>;
++			currentQuestionIndex: number;
++			currentQuestion: any;
++			currentSlideType: string;
++		};
++		surveyConfig: {
++			welcomeScreen: any;
++			endScreen: any;
+ 		};
+ 	};
+ 	/**
+@@ -571,16 +586,239 @@ export class Formsmd {
+ 		index: number;
+ 	};
+ 	/**
+-	 * Go through each slide (after the current one) to get the next one to make
+-	 * active (depending on the jump condition).
++	 * Get survey settings and theme from API
+ 	 *
+-	 * @returns {{slide: HTMLElement, index: number}} the next slide and its
+-	 * index
++	 * @returns {Promise<Object>} survey data
+ 	 */
+-	getNextSlide: () => {
+-		slide: HTMLElement;
+-		index: number;
+-	};
++	getSurveyFromAPI: () => Promise<any>;
++	/**
++	 * Get the next question from the API
++	 *
++	 * @param {Object} currentResponse - Current question response data
++	 * @returns {Promise<{question: Object, isEndSlide: boolean}>} the next question data
++	 */
++	getNextQuestionFromAPI: (currentResponse?: any) => Promise<{
++		question: any;
++		isEndSlide: boolean;
++	}>;
++	/**
++	 * Initialize the form from API data
++	 */
++	initializeFromAPI: () => Promise<void>;
++	/**
++	 * Initialize the form with API configuration
++	 */
++	initializeWithApiConfig: (config: any) => void;
++	template: string;
++	/**
++	 * Initialize FormsMD with configuration
++	 */
++	initWithConfig: (config: any) => void;
++	/**
++	 * Apply survey theme and settings
++	 *
++	 * @param {Object} surveyData - Survey data from API
++	 */
++	applySurveyTheme: (surveyData: any) => void;
++	/**
++	 * Get current form data for API submission using questionId-based approach
++	 *
++	 * @param {HTMLElement} activeSlide - The current active slide
++	 * @param {Object} originalQuestion - The original question object from API
++	 * @returns {Object} Form data with questionId, value, and timeSpent
++	 */
++	getCurrentFormData: (activeSlide: HTMLElement, originalQuestion?: any) => any;
++	/**
++	 * Get question type from DOM if not provided in original question
++	 *
++	 * @param {HTMLElement} activeSlide - The current active slide
++	 * @param {string} questionId - The question ID
++	 * @returns {string} Question type
++	 */
++	getQuestionTypeFromDOM: (
++		activeSlide: HTMLElement,
++		questionId: string,
++	) => string;
++	/**
++	 * Extract value based on question type using questionId
++	 *
++	 * @param {HTMLElement} activeSlide - The current active slide
++	 * @param {string} questionId - The question ID
++	 * @param {string} questionType - The question type
++	 * @param {Object} questionConfig - Question configuration (options, etc.)
++	 * @returns {string|number|Array} Extracted value
++	 */
++	extractValueByQuestionType: (
++		activeSlide: HTMLElement,
++		questionId: string,
++		questionType: string,
++		questionConfig: any,
++	) => string | number | any[];
++	/**
++	 * Extract value from choice input (radio/checkbox)
++	 *
++	 * @param {HTMLElement} activeSlide - The current active slide
++	 * @param {string} questionId - The question ID
++	 * @param {Object} questionConfig - Question configuration
++	 * @returns {string|Array} Extracted value
++	 */
++	extractChoiceInputValue: (
++		activeSlide: HTMLElement,
++		questionId: string,
++		questionConfig: any,
++	) => string | any[];
++	/**
++	 * Extract value from text input
++	 *
++	 * @param {HTMLElement} activeSlide - The current active slide
++	 * @param {string} questionId - The question ID
++	 * @returns {string} Extracted value
++	 */
++	extractTextInputValue: (
++		activeSlide: HTMLElement,
++		questionId: string,
++	) => string;
++	/**
++	 * Extract value from number input
++	 *
++	 * @param {HTMLElement} activeSlide - The current active slide
++	 * @param {string} questionId - The question ID
++	 * @returns {number|null} Extracted value
++	 */
++	extractNumberInputValue: (
++		activeSlide: HTMLElement,
++		questionId: string,
++	) => number | null;
++	/**
++	 * Extract value from rating input
++	 *
++	 * @param {HTMLElement} activeSlide - The current active slide
++	 * @param {string} questionId - The question ID
++	 * @returns {number|null} Extracted value
++	 */
++	extractRatingInputValue: (
++		activeSlide: HTMLElement,
++		questionId: string,
++	) => number | null;
++	/**
++	 * Extract value from datetime input
++	 *
++	 * @param {HTMLElement} activeSlide - The current active slide
++	 * @param {string} questionId - The question ID
++	 * @returns {string} Extracted value
++	 */
++	extractDateTimeInputValue: (
++		activeSlide: HTMLElement,
++		questionId: string,
++	) => string;
++	/**
++	 * Extract value from file input
++	 *
++	 * @param {HTMLElement} activeSlide - The current active slide
++	 * @param {string} questionId - The question ID
++	 * @returns {string} Extracted value
++	 */
++	extractFileInputValue: (
++		activeSlide: HTMLElement,
++		questionId: string,
++	) => string;
++	/**
++	 * Set up the basic DOM structure for API-driven mode
++	 */
++	setupApiDrivenStructure: () => void;
++	/**
++	 * Set up the basic form structure
++	 */
++	setupFormStructure: () => void;
++	/**
++	 * Convert API question to slide definition format
++	 *
++	 * @param {Object} question - The question object from API
++	 * @returns {string} slide definition in markdown format
++	 */
++	convertAPIQuestionToSlideDefinition: (question: any) => string;
++	/**
++	 * Create the next slide from its definition and insert it into the DOM
++	 *
++	 * @param {string} slideDefinition
++	 * @param {boolean} isEndSlide
++	 * @returns {HTMLElement} the created slide element
++	 */
++	createNextSlide: (
++		slideDefinition: string,
++		isEndSlide: boolean,
++	) => HTMLElement;
++	/**
++	 * Lifecycle Manager - Create question with caching
++	 */
++	createQuestionLifecycle: (
++		questionData: any,
++		slideDefinition: any,
++		isEndSlide?: boolean,
++		slideType?: string,
++	) => Element;
++	/**
++	 * Lifecycle Manager - Destroy question and cache it
++	 */
++	destroyQuestionLifecycle: (slideElement: any) => void;
++	/**
++	 * Get the currently active slide
++	 */
++	getActiveSlide: () => Element;
++	/**
++	 * Reset button processing state - ensures all buttons are enabled and functional
++	 */
++	resetButtonProcessingState: () => void;
++	/**
++	 * Show a slide (make it active)
++	 */
++	showSlide: (slideElement: any) => void;
++	/**
++	 * Navigation Manager - Navigate to specific question
++	 */
++	navigateToQuestion: (targetIndex: any) => Promise<void>;
++	/**
++	 * Restore user response to a slide
++	 */
++	restoreUserResponse: (slideElement: any, response: any) => void;
++	/**
++	 * Handle answer changes and branching
++	 */
++	handleAnswerChange: (questionId: any, newResponse: any) => Promise<void>;
++	/**
++	 * Enhanced back navigation
++	 */
++	handleBackNavigation: () => void;
++	/**
++	 * Enhanced forward navigation
++	 */
++	handleForwardNavigation: () => void;
++	/**
++	 * Render welcome slide
++	 */
++	renderWelcomeSlide: (question: any, config: any) => string;
++	/**
++	 * Render end slide
++	 */
++	renderEndSlide: (question: any, config: any) => any;
++	/**
++	 * Render content slide (generic)
++	 */
++	renderContentSlide: (slideType: any, question: any, config: any) => any;
++	/**
++	 * Handle end screen navigation
++	 */
++	handleEndNavigation: () => void;
++	/**
++	 * Create content slide from HTML
++	 */
++	createContentSlide: (slideHtml: any) => Element;
++	/**
++	 * Process slide content (markdown parsing, highlighting, etc.)
++	 *
++	 * @param {HTMLElement} slideElement
++	 */
++	processSlideContent: (slideElement: HTMLElement) => void;
+ 	/**
+ 	 * Get the CSS slide transition duration (in milliseconds).
+ 	 *
+@@ -648,7 +886,19 @@ export class Formsmd {
+ 	 */
+ 	nextSlide: (activeSlide: HTMLElement) => void;
+ 	/**
+-	 * Go to the previous slide.
++	 * Handle successful next slide creation
++	 *
++	 * @param {HTMLElement} activeSlide
++	 * @param {HTMLElement} nextSlide
++	 * @param {Object} nextSlideData
++	 */
++	handleNextSlideSuccess: (
++		activeSlide: HTMLElement,
++		nextSlide: HTMLElement,
++		nextSlideData: any,
++	) => void;
++	/**
++	 * Go to the previous slide using lifecycle management.
+ 	 *
+ 	 * @param {HTMLElement} activeSlide
+ 	 */
+@@ -678,9 +928,14 @@ export class Formsmd {
+ 	 * @param {boolean} isFirstInit
+ 	 */
+ 	_init: (isFirstInit: boolean) => void;
+-	template: string;
+ 	/**
+ 	 * Initialize for the first time.
+ 	 */
+ 	init: () => void;
++	/**
++	 * Process question response and create the next slide
++	 *
++	 * @param {Object} questionData - The question data from API
++	 */
++	processQuestionResponse: (questionData: any) => void;
+ }
+diff --git a/types/slides-parse.d.ts b/types/slides-parse.d.ts
+index df8c808..e70cb5b 100644
+--- a/types/slides-parse.d.ts
++++ b/types/slides-parse.d.ts
+@@ -51,3 +51,47 @@ export function parseSlides(
+ 	localization: string,
+ 	slideDelimiter: string,
+ ): string;
++/**
++ * Parse slides for lazy loading - returns first slide HTML and stores definitions
++ *
++ * @param {string} template
++ * @param {boolean} isForm
++ * @param {{showRestartBtn: boolean, submitBtnText: string}} btnSettings
++ * @param {string} localization
++ * @param {string} slideDelimiter
++ * @returns {{firstSlideHtml: string, slideDefinitions: Array, endSlideDefinition: string}} first slide HTML and slide definitions
++ */
++export function parseSlidesLazy(
++	template: string,
++	isForm: boolean,
++	btnSettings: {
++		showRestartBtn: boolean;
++		submitBtnText: string;
++	},
++	localization: string,
++	slideDelimiter: string,
++): {
++	firstSlideHtml: string;
++	slideDefinitions: any[];
++	endSlideDefinition: string;
++};
++/**
++ * Render a slide from its definition
++ *
++ * @param {string} slideDefinition
++ * @param {boolean} isForm
++ * @param {boolean} isFirstSlide
++ * @param {{showRestartBtn: boolean, submitBtnText: string}} btnSettings
++ * @param {string} localization
++ * @returns {string} slide HTML
++ */
++export function renderSlideFromDefinition(
++	slideDefinition: string,
++	isForm: boolean,
++	isFirstSlide: boolean,
++	btnSettings: {
++		showRestartBtn: boolean;
++		submitBtnText: string;
++	},
++	localization: string,
++): string;
+diff --git a/types/translations.d.ts b/types/translations.d.ts
+index 033794e..fc4b9a6 100644
+--- a/types/translations.d.ts
++++ b/types/translations.d.ts
+@@ -39,6 +39,9 @@ export namespace translations {
+ 		"star-plural": string;
+ 		"star-singular": string;
+ 		"start-btn": string;
++		"start-survey-btn": string;
++		"create-survey-btn": string;
++		"redirecting-message": string;
+ 		"text-input-placeholder": string;
+ 		"textarea-new-line-text": string;
+ 		"time-input-error": string;
+@@ -85,6 +88,7 @@ export namespace translations {
+ 		"star-plural": string;
+ 		"star-singular": string;
+ 		"start-btn": string;
++		"start-survey-btn": string;
+ 		"text-input-placeholder": string;
+ 		"textarea-new-line-text": string;
+ 		"time-input-error": string;
+@@ -131,6 +135,7 @@ export namespace translations {
+ 		"star-plural": string;
+ 		"star-singular": string;
+ 		"start-btn": string;
++		"start-survey-btn": string;
+ 		"text-input-placeholder": string;
+ 		"textarea-new-line-text": string;
+ 		"time-input-error": string;
+@@ -177,6 +182,7 @@ export namespace translations {
+ 		"star-plural": string;
+ 		"star-singular": string;
+ 		"start-btn": string;
++		"start-survey-btn": string;
+ 		"text-input-placeholder": string;
+ 		"textarea-new-line-text": string;
+ 		"time-input-error": string;
+@@ -223,6 +229,7 @@ export namespace translations {
+ 		"star-plural": string;
+ 		"star-singular": string;
+ 		"start-btn": string;
++		"start-survey-btn": string;
+ 		"text-input-placeholder": string;
+ 		"textarea-new-line-text": string;
+ 		"time-input-error": string;
+@@ -269,6 +276,7 @@ export namespace translations {
+ 		"star-plural": string;
+ 		"star-singular": string;
+ 		"start-btn": string;
++		"start-survey-btn": string;
+ 		"text-input-placeholder": string;
+ 		"textarea-new-line-text": string;
+ 		"time-input-error": string;
+@@ -315,6 +323,7 @@ export namespace translations {
+ 		"star-plural": string;
+ 		"star-singular": string;
+ 		"start-btn": string;
++		"start-survey-btn": string;
+ 		"text-input-placeholder": string;
+ 		"textarea-new-line-text": string;
+ 		"time-input-error": string;
+@@ -361,6 +370,7 @@ export namespace translations {
+ 		"star-plural": string;
+ 		"star-singular": string;
+ 		"start-btn": string;
++		"start-survey-btn": string;
+ 		"text-input-placeholder": string;
+ 		"textarea-new-line-text": string;
+ 		"time-input-error": string;
+@@ -407,6 +417,7 @@ export namespace translations {
+ 		"star-plural": string;
+ 		"star-singular": string;
+ 		"start-btn": string;
++		"start-survey-btn": string;
+ 		"text-input-placeholder": string;
+ 		"textarea-new-line-text": string;
+ 		"time-input-error": string;
+diff --git a/types/welcome-screen-template.d.ts b/types/welcome-screen-template.d.ts
+new file mode 100644
+index 0000000..e3ed6ac
+--- /dev/null
++++ b/types/welcome-screen-template.d.ts
+@@ -0,0 +1,20 @@
++/**
++ * Create a welcome screen slide
++ *
++ * @param {Object} config - Welcome screen configuration
++ * @param {string} config.title - Welcome screen title
++ * @param {string} config.content - Welcome screen content/description
++ * @param {string} config.buttonText - CTA button text
++ * @param {string} config.alignment - Text alignment: "left", "center", or "right" (default: "center")
++ * @param {string} localization - Localization setting
++ * @returns {string} Welcome screen HTML
++ */
++export function createWelcomeScreen(
++	config: {
++		title: string;
++		content: string;
++		buttonText: string;
++		alignment: string;
++	},
++	localization: string,
++): string;

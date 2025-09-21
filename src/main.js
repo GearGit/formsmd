@@ -440,6 +440,23 @@ class Formsmd {
 			settings: getDefaultSettings(),
 			slideData: {
 				currentIndex: 0,
+				slideDefinitions: [],
+				endSlideDefinition: "",
+				availableSlides: 1,
+			},
+			// NEW: Lifecycle management state
+			lifecycle: {
+				questionCache: new Map(), // questionId -> {questionData, slideDefinition, slideElement}
+				questionPath: [], // Array of questionIds in order
+				userResponses: new Map(), // questionId -> responseData
+				currentQuestionIndex: -1,
+				currentQuestion: null,
+				currentSlideType: "question", // 'welcome', 'question', 'end'
+			},
+			// NEW: Survey configuration state
+			surveyConfig: {
+				welcomeScreen: null,
+				endScreen: null,
 			},
 		};
 	};
@@ -2106,51 +2123,1464 @@ class Formsmd {
 	};
 
 	/**
-	 * Go through each slide (after the current one) to get the next one to make
-	 * active (depending on the jump condition).
+	 * Get survey settings and theme from API
 	 *
-	 * @returns {{slide: HTMLElement, index: number}} the next slide and its
-	 * index
+	 * @returns {Promise<Object>} survey data
 	 */
-	getNextSlide = () => {
+	getSurveyFromAPI = async () => {
 		const instance = this;
 
-		const currentIndex = instance.state.slideData.currentIndex;
-		const slides = instance.container.querySelectorAll(".fmd-slide");
-		let nextSlide = slides[currentIndex];
-		let nextSlideIndex = currentIndex;
+		// Get survey ID from configuration
+		const surveyId =
+			instance.state.apiConfig?.surveyId || instance.options.surveyId;
+		if (!surveyId) {
+			throw new Error("Survey ID is required but not provided");
+		}
+		const apiBaseUrl =
+			instance.state.apiConfig?.apiBaseUrl ||
+			instance.options.apiBaseUrl ||
+			"http://localhost:3001";
 
-		// Go through each slide (after the current one)
-		for (let i = currentIndex + 1; i < slides.length; i++) {
-			const slide = slides[i];
-
-			// If jump condition not present, this is the next slide
-			if (!slide.hasAttribute("data-fmd-jump")) {
-				nextSlide = slide;
-				nextSlideIndex = i;
-				break;
-			}
-
-			// Use Nunjucks to check jump condition
-			nunjucks.configure({ autoescape: false });
-			const jumpCondition = nunjucks.renderString(
-				`{% if ${slide.getAttribute("data-fmd-jump")} %}true{% endif %}`,
+		try {
+			const response = await fetch(
+				`${apiBaseUrl}/api/public/surveys/${surveyId}`,
 				{
-					...instance.state.data,
-					...instance.state.formData,
+					method: "GET",
+					headers: {
+						"Content-Type": "application/json",
+					},
 				},
 			);
-			if (jumpCondition === "true") {
-				nextSlide = slide;
-				nextSlideIndex = i;
-				break;
+
+			if (!response.ok) {
+				throw new Error(`HTTP error! status: ${response.status}`);
+			}
+
+			const result = await response.json();
+
+			if (result.success && result.data) {
+				return result.data;
+			}
+
+			throw new Error("Invalid survey API response format");
+		} catch (error) {
+			console.error("❌ Error fetching survey:", error);
+			throw error;
+		}
+	};
+
+	/**
+	 * Get the next question from the API
+	 *
+	 * @param {Object} currentResponse - Current question response data
+	 * @returns {Promise<{question: Object, isEndSlide: boolean}>} the next question data
+	 */
+	getNextQuestionFromAPI = async (currentResponse = null) => {
+		const instance = this;
+
+		// Get survey ID from configuration
+		const surveyId =
+			instance.state.apiConfig?.surveyId || instance.options.surveyId;
+		if (!surveyId) {
+			throw new Error("Survey ID is required but not provided");
+		}
+		const apiBaseUrl =
+			instance.state.apiConfig?.apiBaseUrl ||
+			instance.options.apiBaseUrl ||
+			"http://localhost:3001";
+
+		try {
+			const requestBody = {
+				sessionId: "test-session-12345",
+			};
+
+			// Add current question response if provided
+			if (currentResponse) {
+				requestBody.currentQuestionId = currentResponse.questionId;
+				requestBody.response = {
+					value: currentResponse.value,
+					timeSpent: currentResponse.timeSpent || 0,
+				};
+			}
+
+			const response = await fetch(
+				`${apiBaseUrl}/api/public/surveys/${surveyId}/question`,
+				{
+					method: "POST",
+					headers: {
+						"Content-Type": "application/json",
+					},
+					body: JSON.stringify(requestBody),
+				},
+			);
+
+			if (!response.ok) {
+				throw new Error(`HTTP error! status: ${response.status}`);
+			}
+
+			const result = await response.json();
+
+			if (result.success && result.data) {
+				const { status, question, progress } = result.data;
+
+				if (status === "question" && question) {
+					// Convert API question to slide definition
+					const slideDefinition =
+						instance.convertAPIQuestionToSlideDefinition(question);
+					const isEndSlide =
+						progress.isLastQuestion ||
+						question.slideType === "end" ||
+						question.type === "end";
+
+					return {
+						question: question,
+						slideDefinition: slideDefinition,
+						isEndSlide: isEndSlide,
+						progress: progress,
+					};
+				} else if (status === "completed") {
+					return {
+						question: null,
+						slideDefinition: null,
+						isEndSlide: true,
+						progress: progress,
+					};
+				}
+			}
+
+			throw new Error("Invalid API response format");
+		} catch (error) {
+			console.error("❌ Error fetching next question:", error);
+			throw error;
+		}
+	};
+
+	/**
+	 * Initialize the form from API data
+	 */
+	initializeFromAPI = async () => {
+		const instance = this;
+
+		// Record the start time for loader delay calculation
+		const loaderStartTime = Date.now();
+
+		// Configurable minimum loader display time (in milliseconds)
+		// You can adjust this value to test different delay times
+		const minLoaderTime = instance.options.minLoaderTime || 1500; // 1.5 seconds default
+
+		try {
+			// Get survey settings and theme
+			const surveyData = await instance.getSurveyFromAPI();
+
+			// Store welcome/end screen configuration
+			if (surveyData.welcomeScreen) {
+				instance.state.surveyConfig.welcomeScreen = surveyData.welcomeScreen;
+			}
+			if (surveyData.endScreen) {
+				instance.state.surveyConfig.endScreen = surveyData.endScreen;
+			}
+
+			// Apply survey theme and settings
+			instance.applySurveyTheme(surveyData);
+
+			// Set up the form structure first
+			instance.setupFormStructure();
+
+			// Get first question (could be welcome, regular, or end)
+			const firstQuestionData = await instance.getNextQuestionFromAPI();
+
+			// Store the current question data in state
+			instance.state.currentQuestion = firstQuestionData.question;
+
+			// Initialize lifecycle state with first question
+			if (firstQuestionData.question && firstQuestionData.question.questionId) {
+				instance.state.lifecycle.questionPath.push(
+					firstQuestionData.question.questionId,
+				);
+				instance.state.lifecycle.currentQuestionIndex = 0;
+				instance.state.lifecycle.currentQuestion = firstQuestionData.question;
+			}
+
+			// Create first slide from API question with lifecycle management
+			const firstSlideDefinition = instance.convertAPIQuestionToSlideDefinition(
+				firstQuestionData.question,
+			);
+			const firstSlide = instance.createQuestionLifecycle(
+				firstQuestionData.question,
+				firstSlideDefinition,
+				firstQuestionData.isEndSlide,
+				firstQuestionData.question.slideType || "question",
+			);
+
+			// Add event listeners
+			instance.addEventListeners(instance.container, true);
+
+			// Calculate remaining time to meet minimum loader display time
+			const elapsedTime = Date.now() - loaderStartTime;
+			const remainingTime = Math.max(0, minLoaderTime - elapsedTime);
+
+			// Hide loader and show content after the calculated delay
+			setTimeout(() => {
+				instance.container
+					.querySelector(".fmd-loader-container")
+					.classList.add("fmd-d-none");
+
+				// Make first slide active
+				firstSlide.classList.add("fmd-slide-active");
+				instance.hasNewActiveSlide(firstSlide, 1, true);
+			}, remainingTime);
+		} catch (error) {
+			console.error("❌ Error initializing from API:", error);
+
+			// Show error message
+			const loaderContainer = instance.container.querySelector(
+				".fmd-loader-container",
+			);
+			if (loaderContainer) {
+				loaderContainer.innerHTML = `
+					<div class="fmd-text-center">
+						<div class="fmd-error">
+							<div class="fmd-error-inner">
+								<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" class="fmd-icon fmd-error-icon" aria-hidden="true" focusable="false">
+									<path d="M256 32c14.2 0 27.3 7.5 34.5 19.8l216 368c7.3 12.4 7.3 27.7 .2 40.1S486.3 480 472 480H40c-14.3 0-27.6-7.7-34.7-20.1s-7-27.8 .2-40.1l216-368C228.7 39.5 241.8 32 256 32zm0 128c-13.3 0-24 10.7-24 24V296c0 13.3 10.7 24 24 24s24-10.7 24-24V184c0-13.3-10.7-24-24-24zm32 224a32 32 0 1 0 -64 0 32 32 0 1 0 64 0z"></path>
+								</svg>
+								Failed to load survey. Please try again.
+							</div>
+						</div>
+					</div>
+				`;
+			}
+		}
+	};
+
+	/**
+	 * Initialize the form with API configuration
+	 */
+	initializeWithApiConfig = (config) => {
+		const instance = this;
+
+		// Store API configuration
+		instance.state.apiConfig = {
+			surveyId: config.surveyId,
+			apiBaseUrl: config.apiBaseUrl,
+		};
+
+		// Set up basic template for API-driven mode
+		instance.template = ""; // Empty template for API-driven mode
+
+		// Update API endpoints to use the configured survey ID
+		instance.getSurveyFromAPI = async () => {
+			const surveyData = await fetchSurveyData(
+				config.surveyId,
+				config.apiBaseUrl,
+			);
+			return surveyData;
+		};
+
+		instance.getNextQuestionFromAPI = async (currentResponse = null) => {
+			return await fetchNextQuestion(
+				config.surveyId,
+				config.apiBaseUrl,
+				currentResponse,
+			);
+		};
+
+		// Set up the basic DOM structure for API-driven mode
+		instance.setupApiDrivenStructure();
+
+		// Start API initialization
+		instance.initializeFromAPI();
+	};
+
+	/**
+	 * Initialize FormsMD with configuration
+	 */
+	initWithConfig = (config) => {
+		const instance = this;
+
+		// Update options with API configuration
+		if (config.isApiDriven) {
+			instance.options.isApiDriven = true;
+			instance.options.surveyId = config.surveyId;
+			instance.options.apiBaseUrl = config.apiBaseUrl;
+		}
+
+		// Initialize
+		instance.init();
+	};
+
+	/**
+	 * Apply survey theme and settings
+	 *
+	 * @param {Object} surveyData - Survey data from API
+	 */
+	applySurveyTheme = (surveyData) => {
+		const instance = this;
+
+		// Apply theme colors if available
+		if (surveyData.theme) {
+			const rootElem = instance.container.querySelector(".fmd-root");
+			if (rootElem) {
+				// Convert hex colors to RGB and apply
+				if (surveyData.theme.backgroundColor) {
+					const rgb = hexToRgb(surveyData.theme.backgroundColor);
+					if (rgb) {
+						rootElem.style.setProperty("--fmd-body-bg-r", rgb.r);
+						rootElem.style.setProperty("--fmd-body-bg-g", rgb.g);
+						rootElem.style.setProperty("--fmd-body-bg-b", rgb.b);
+						rootElem.style.setProperty(
+							"--fmd-body-bg-rgb",
+							`${rgb.r}, ${rgb.g}, ${rgb.b}`,
+						);
+					}
+				}
+
+				if (surveyData.theme.textColor) {
+					const rgb = hexToRgb(surveyData.theme.textColor);
+					if (rgb) {
+						rootElem.style.setProperty(
+							"--fmd-body-color-rgb",
+							`${rgb.r}, ${rgb.g}, ${rgb.b}`,
+						);
+						rootElem.style.setProperty("--fmd-body-color-r", rgb.r);
+						rootElem.style.setProperty("--fmd-body-color-g", rgb.g);
+						rootElem.style.setProperty("--fmd-body-color-b", rgb.b);
+					}
+				}
+
+				if (surveyData.theme.buttonColor || surveyData.theme.accent) {
+					const rgb = hexToRgb(
+						surveyData.theme.buttonColor || surveyData.theme.accent,
+					);
+					if (rgb) {
+						rootElem.style.setProperty(
+							"--fmd-accent-rgb",
+							`${rgb.r}, ${rgb.g}, ${rgb.b}`,
+						);
+						rootElem.style.setProperty("--fmd-accent-r", rgb.r);
+						rootElem.style.setProperty("--fmd-accent-g", rgb.g);
+						rootElem.style.setProperty("--fmd-accent-b", rgb.b);
+					}
+				}
+
+				if (surveyData.theme.accentForeground) {
+					const rgb = hexToRgb(surveyData.theme.accentForeground);
+					if (rgb) {
+						rootElem.style.setProperty(
+							"--fmd-accent-foreground-rgb",
+							`${rgb.r}, ${rgb.g}, ${rgb.b}`,
+						);
+						rootElem.style.setProperty("--fmd-accent-foreground-r", rgb.r);
+						rootElem.style.setProperty("--fmd-accent-foreground-g", rgb.g);
+						rootElem.style.setProperty("--fmd-accent-foreground-b", rgb.b);
+					}
+				}
 			}
 		}
 
-		return {
-			slide: nextSlide,
-			index: nextSlideIndex,
+		// Store survey data for later use
+		instance.state.surveyData = surveyData;
+	};
+
+	/**
+	 * Get current form data for API submission using questionId-based approach
+	 *
+	 * @param {HTMLElement} activeSlide - The current active slide
+	 * @param {Object} originalQuestion - The original question object from API
+	 * @returns {Object} Form data with questionId, value, and timeSpent
+	 */
+	getCurrentFormData = (activeSlide, originalQuestion = null) => {
+		const instance = this;
+
+		// Get questionId from original question or extract from DOM
+		let questionId;
+		if (originalQuestion && originalQuestion.questionId) {
+			questionId = originalQuestion.questionId;
+		} else {
+			// Find the current question ID from the slide
+			const formField = activeSlide.querySelector("[data-fmd-name]");
+			if (!formField) {
+				console.log("🔍 DEBUG: No form field found with data-fmd-name");
+				return null;
+			}
+			questionId = formField.getAttribute("data-fmd-name");
+		}
+
+		// Get question type and configuration
+		const questionType =
+			originalQuestion?.type ||
+			this.getQuestionTypeFromDOM(activeSlide, questionId);
+		const questionConfig = originalQuestion?.options || {};
+
+		// Extract value based on question type
+		let value = this.extractValueByQuestionType(
+			activeSlide,
+			questionId,
+			questionType,
+			questionConfig,
+		);
+
+		// Calculate time spent (simple implementation)
+		const timeSpent = Math.floor(Math.random() * 30) + 5; // Random time for demo
+
+		const formData = {
+			questionId: questionId,
+			value: value,
+			timeSpent: timeSpent,
 		};
+		return formData;
+	};
+
+	/**
+	 * Get question type from DOM if not provided in original question
+	 *
+	 * @param {HTMLElement} activeSlide - The current active slide
+	 * @param {string} questionId - The question ID
+	 * @returns {string} Question type
+	 */
+	getQuestionTypeFromDOM = (activeSlide, questionId) => {
+		// Look for fieldset with data-fmd-name (choice inputs)
+		const fieldset = activeSlide.querySelector(
+			`fieldset[data-fmd-name="${questionId}"]`,
+		);
+		if (fieldset) {
+			const fieldType = fieldset.getAttribute("data-fmd-type");
+			if (fieldType === "radio") {
+				return "choice_input";
+			}
+			if (fieldType === "checkbox") {
+				return "choice_input";
+			}
+			if (fieldType === "num-radio") {
+				return "rating_input";
+			}
+		}
+
+		// Look for individual input elements
+		const input = activeSlide.querySelector(`input[name="${questionId}"]`);
+		if (input) {
+			const inputType = input.getAttribute("type");
+			if (
+				inputType === "text" ||
+				inputType === "email" ||
+				inputType === "url"
+			) {
+				return "text_input";
+			}
+			if (inputType === "number") {
+				return "number_input";
+			}
+			if (inputType === "tel") {
+				return "text_input";
+			}
+			if (
+				inputType === "datetime-local" ||
+				inputType === "date" ||
+				inputType === "time"
+			) {
+				return "datetime_input";
+			}
+		}
+
+		// Look for textarea
+		const textarea = activeSlide.querySelector(
+			`textarea[name="${questionId}"]`,
+		);
+		if (textarea) {
+			return "text_input";
+		}
+
+		// Look for select
+		const select = activeSlide.querySelector(`select[name="${questionId}"]`);
+		if (select) {
+			return "choice_input";
+		}
+
+		// Default fallback
+		return "text_input";
+	};
+
+	/**
+	 * Extract value based on question type using questionId
+	 *
+	 * @param {HTMLElement} activeSlide - The current active slide
+	 * @param {string} questionId - The question ID
+	 * @param {string} questionType - The question type
+	 * @param {Object} questionConfig - Question configuration (options, etc.)
+	 * @returns {string|number|Array} Extracted value
+	 */
+	extractValueByQuestionType = (
+		activeSlide,
+		questionId,
+		questionType,
+		questionConfig,
+	) => {
+		switch (questionType) {
+			case "choice_input":
+				return this.extractChoiceInputValue(
+					activeSlide,
+					questionId,
+					questionConfig,
+				);
+			case "text_input":
+			case "email_input":
+			case "urlinput":
+			case "telinput":
+				return this.extractTextInputValue(activeSlide, questionId);
+			case "number_input":
+				return this.extractNumberInputValue(activeSlide, questionId);
+			case "rating_input":
+			case "opinion_scale":
+				return this.extractRatingInputValue(activeSlide, questionId);
+			case "datetime_input":
+			case "dateinput":
+			case "timeinput":
+				return this.extractDateTimeInputValue(activeSlide, questionId);
+			case "file_input":
+				return this.extractFileInputValue(activeSlide, questionId);
+			default:
+				return this.extractTextInputValue(activeSlide, questionId);
+		}
+	};
+
+	/**
+	 * Extract value from choice input (radio/checkbox)
+	 *
+	 * @param {HTMLElement} activeSlide - The current active slide
+	 * @param {string} questionId - The question ID
+	 * @param {Object} questionConfig - Question configuration
+	 * @returns {string|Array} Extracted value
+	 */
+	extractChoiceInputValue = (activeSlide, questionId, questionConfig) => {
+		// Check if it's multiple choice (checkbox) or single choice (radio)
+		const isMultiple = questionConfig?.multiple || false;
+
+		// Get the actual radio button name from the first radio button
+		let actualRadioName = questionId;
+		const allRadioButtons = activeSlide.querySelectorAll('input[type="radio"]'); // ✅ Add this line
+		if (allRadioButtons.length > 0) {
+			actualRadioName = allRadioButtons[0].name;
+		}
+
+		if (isMultiple) {
+			// Multiple choice - return array of selected values
+			const checkedInputs = activeSlide.querySelectorAll(
+				`input[name="${actualRadioName}"]:checked`,
+			);
+			const values = [];
+			checkedInputs.forEach((input) => {
+				values.push(input.value);
+			});
+			return values;
+		} else {
+			// Single choice - return single selected value
+			const checkedInput = activeSlide.querySelector(
+				`input[name="${actualRadioName}"]:checked`,
+			);
+			return checkedInput ? checkedInput.value : "";
+		}
+	};
+
+	/**
+	 * Extract value from text input
+	 *
+	 * @param {HTMLElement} activeSlide - The current active slide
+	 * @param {string} questionId - The question ID
+	 * @returns {string} Extracted value
+	 */
+	extractTextInputValue = (activeSlide, questionId) => {
+		const input = activeSlide.querySelector(`input[name="${questionId}"]`);
+		const textarea = activeSlide.querySelector(
+			`textarea[name="${questionId}"]`,
+		);
+
+		if (input) {
+			return input.value || "";
+		} else if (textarea) {
+			return textarea.value || "";
+		}
+
+		return "";
+	};
+
+	/**
+	 * Extract value from number input
+	 *
+	 * @param {HTMLElement} activeSlide - The current active slide
+	 * @param {string} questionId - The question ID
+	 * @returns {number|null} Extracted value
+	 */
+	extractNumberInputValue = (activeSlide, questionId) => {
+		const input = activeSlide.querySelector(`input[name="${questionId}"]`);
+		if (input && input.value) {
+			const numValue = parseFloat(input.value);
+			return isNaN(numValue) ? null : numValue;
+		}
+		return null;
+	};
+
+	/**
+	 * Extract value from rating input
+	 *
+	 * @param {HTMLElement} activeSlide - The current active slide
+	 * @param {string} questionId - The question ID
+	 * @returns {number|null} Extracted value
+	 */
+	extractRatingInputValue = (activeSlide, questionId) => {
+		const checkedInput = activeSlide.querySelector(
+			`input[name="${questionId}"]:checked`,
+		);
+		if (checkedInput && checkedInput.value) {
+			const numValue = parseInt(checkedInput.value);
+			return isNaN(numValue) ? null : numValue;
+		}
+		return null;
+	};
+
+	/**
+	 * Extract value from datetime input
+	 *
+	 * @param {HTMLElement} activeSlide - The current active slide
+	 * @param {string} questionId - The question ID
+	 * @returns {string} Extracted value
+	 */
+	extractDateTimeInputValue = (activeSlide, questionId) => {
+		const input = activeSlide.querySelector(`input[name="${questionId}"]`);
+		return input ? input.value || "" : "";
+	};
+
+	/**
+	 * Extract value from file input
+	 *
+	 * @param {HTMLElement} activeSlide - The current active slide
+	 * @param {string} questionId - The question ID
+	 * @returns {string} Extracted value
+	 */
+	extractFileInputValue = (activeSlide, questionId) => {
+		const input = activeSlide.querySelector(`input[name="${questionId}"]`);
+		if (input && input.files && input.files.length > 0) {
+			return input.files[0].name; // Return filename for now
+		}
+		return "";
+	};
+
+	/**
+	 * Set up the basic DOM structure for API-driven mode
+	 */
+	setupApiDrivenStructure = () => {
+		const instance = this;
+
+		// Set up basic settings for API-driven mode
+		instance.state.settings = {
+			...instance.state.settings,
+			"id": instance.options.surveyId,
+			"title": "Loading Survey...",
+			"page": "form-slides",
+			"slide-delimiter": "---",
+			"submit-button-text": "OK",
+			"restart-button": "hide",
+			"localization": "en",
+			"dir": "ltr",
+		};
+
+		// Set up basic template
+		instance.template = "";
+
+		// Set up basic data
+		instance.state.data = {};
+
+		// Get or create response id
+		instance.getOrCreateResponseId();
+	};
+
+	/**
+	 * Set up the basic form structure
+	 */
+	setupFormStructure = () => {
+		const instance = this;
+
+		// Create main container structure
+		const mainContainer = instance.container.querySelector(".fmd-main");
+		if (mainContainer) {
+			mainContainer.innerHTML = `
+				<div class="fmd-main-container">
+					<div class="fmd-loader-container">
+						<div class="fmd-text-center fmd-mb-3">
+							<div class="fmd-specific-fs-14">Loading...</div>
+						</div>
+						<div class="fmd-loader-progress" role="status" aria-label="Loading"></div>
+					</div>
+					<!-- Slides will be inserted here dynamically -->
+				</div>
+			`;
+		}
+	};
+
+	/**
+	 * Convert API question to slide definition format
+	 *
+	 * @param {Object} question - The question object from API
+	 * @returns {string} slide definition in markdown format
+	 */
+	convertAPIQuestionToSlideDefinition = (question) => {
+		const instance = this;
+
+		// Handle welcome screen questions
+		if (question.type === "welcome") {
+			// Create a special slide definition for welcome screens
+			// This will be rendered using the welcome screen template
+			return {
+				type: "welcome",
+				questionId: question.questionId,
+				title: question.question || question.title,
+				content: question.content || question.description,
+				buttonText: question.options?.buttonText || question.buttonText,
+				alignment:
+					question.options?.alignment || question.alignment || "center",
+				showProgress: question.showProgress !== false,
+			};
+		}
+
+		// Handle end screen questions
+		if (question.type === "end") {
+			// Create a special slide definition for end screens
+			return {
+				type: "end",
+				questionId: question.questionId,
+				title: question.question || question.title,
+				content: question.content || question.description,
+				buttonText: question.buttonText,
+				showProgress: question.showProgress !== false,
+			};
+		}
+
+		// Map API question types to FormsMD field types
+		let fieldType = "text_input";
+		if (question.type === "choice_input") {
+			fieldType = "choice_input";
+		} else if (question.type === "number_input") {
+			fieldType = "number_input";
+		} else if (question.type === "rating_input") {
+			fieldType = "rating_input";
+		} else if (question.type === "datetime_input") {
+			fieldType = "datetime_input";
+		} else if (question.type === "file_input") {
+			fieldType = "file_input";
+		} else if (question.type === "opinion_scale") {
+			fieldType = "opinion_scale";
+		} else if (question.type === "country_calling_code") {
+			fieldType = "country_calling_code";
+		}
+
+		// Build the slide definition
+		let slideDefinition = `\n`;
+
+		// Add progress if available
+		if (question.order) {
+			slideDefinition += `|> ${Math.round((question.order / 5) * 100)}%\n\n`;
+		}
+
+		// Build the field definition
+		slideDefinition += `${question.questionId}${question.required ? "\\*" : ""} = ${fieldType}(\n`;
+		slideDefinition += `| question = ${question.question}\n`;
+
+		// Add field-specific properties
+		if (
+			question.type === "choice_input" &&
+			question.options &&
+			question.options.choices
+		) {
+			const choices = question.options.choices.map((choice) => choice.text);
+			slideDefinition += `| choices = ${choices.join(", ")}\n`;
+		} else if (question.type === "choice_input" && question.choices) {
+			// Fallback for old format
+			slideDefinition += `| choices = ${question.choices.join(", ")}\n`;
+		}
+
+		if (question.description) {
+			slideDefinition += `| description = ${question.description}\n`;
+		}
+
+		slideDefinition += `)\n`;
+
+		return slideDefinition;
+	};
+
+	/**
+	 * Create the next slide from its definition and insert it into the DOM
+	 *
+	 * @param {string} slideDefinition
+	 * @param {boolean} isEndSlide
+	 * @returns {HTMLElement} the created slide element
+	 */
+	createNextSlide = (slideDefinition, isEndSlide) => {
+		const instance = this;
+
+		// Debug logging
+
+		// Import required functions
+		const { renderSlideFromDefinition } = require("./slides-parse");
+		const { createContentTemplate } = require("./templates-create");
+
+		let slideHtml;
+
+		if (isEndSlide) {
+			// Handle end slide - use the end slide template
+			const { getTranslation } = require("./translations");
+
+			// Create default end slide if no definition provided
+			if (!slideDefinition) {
+				const endSlideTemplate = `
+				<div class="fmd-slide fmd-end-slide">
+					<div class="fmd-grid">
+						<div class="fmd-text-center">
+							<h1 class="fmd-h2 fmd-mb-2">${getTranslation(instance.state.settings.localization, "form-submitted-title")}</h1>
+							<p class="fmd-fs-lead fmd-mb-1">${getTranslation(instance.state.settings.localization, "form-submitted-subtitle")}</p>
+						</div>
+					</div>
+				</div>`;
+				slideHtml = endSlideTemplate;
+			} else {
+				// Render the end slide definition
+				slideHtml = renderSlideFromDefinition(
+					slideDefinition,
+					instance.state.settings.page === "form-slides" ? true : false,
+					false, // isFirstSlide
+					{
+						showRestartBtn:
+							instance.state.settings["restart-button"] === "show"
+								? true
+								: false,
+						submitBtnText: instance.state.settings["submit-button-text"] || "",
+					},
+					instance.state.settings.localization,
+				);
+			}
+		} else {
+			// Render regular slide
+			slideHtml = renderSlideFromDefinition(
+				slideDefinition,
+				instance.state.settings.page === "form-slides" ? true : false,
+				false, // isFirstSlide
+				{
+					showRestartBtn:
+						instance.state.settings["restart-button"] === "show" ? true : false,
+					submitBtnText: instance.state.settings["submit-button-text"] || "",
+				},
+				instance.state.settings.localization,
+			);
+		}
+
+		// Create DOM element from HTML
+		const tempDiv = document.createElement("div");
+		tempDiv.innerHTML = slideHtml;
+		const slideElement = tempDiv.firstElementChild;
+
+		// // Insert the slide into the DOM
+		// const mainContainer = instance.container.querySelector(
+		// 	".fmd-main-container",
+		// );
+
+		// // Remove any existing slides to prevent form element conflicts
+		// const existingSlides = mainContainer.querySelectorAll(
+		// 	".fmd-slide:not(.fmd-first-slide)",
+		// );
+		// existingSlides.forEach((slide) => {
+		// 	if (slide !== slideElement) {
+		// 		slide.remove();
+		// 	}
+		// });
+
+		// mainContainer.appendChild(slideElement);
+
+		// // Process the slide content (markdown, etc.)
+		// instance.processSlideContent(slideElement);
+
+		// // Add event listeners to the new slide
+		// instance.addEventListeners(slideElement, false);
+
+		// // Update available slides count
+		// instance.state.slideData.availableSlides++;
+
+		// Debug logging for slide insertion
+
+		// Debug logging
+
+		return slideElement;
+	};
+
+	/**
+	 * Lifecycle Manager - Create question with caching
+	 */
+	createQuestionLifecycle = (
+		questionData,
+		slideDefinition,
+		isEndSlide = false,
+		slideType = "question",
+	) => {
+		const instance = this;
+
+		let slideElement;
+
+		// Handle different slide types
+		if (
+			slideType === "welcome" ||
+			(slideDefinition && slideDefinition.type === "welcome")
+		) {
+			// Create welcome slide using the slide definition data
+			const welcomeData =
+				slideDefinition && slideDefinition.type === "welcome"
+					? slideDefinition
+					: questionData;
+			const welcomeHtml = instance.renderWelcomeSlide(welcomeData, welcomeData);
+			slideElement = instance.createContentSlide(welcomeHtml);
+		} else if (
+			slideType === "end" ||
+			(slideDefinition && slideDefinition.type === "end")
+		) {
+			// Create end slide using the slide definition data
+			const endData =
+				slideDefinition && slideDefinition.type === "end"
+					? slideDefinition
+					: questionData;
+			const endHtml = instance.renderEndSlide(endData, endData);
+			slideElement = instance.createContentSlide(endHtml);
+		} else {
+			// Create regular question slide (DOM element only, no insertion)
+			slideElement = instance.createNextSlide(slideDefinition, isEndSlide);
+
+			// ✅ ADD BACK: DOM insertion and cleanup logic here
+			// Insert the slide into the DOM
+			const mainContainer = instance.container.querySelector(
+				".fmd-main-container",
+			);
+
+			// Remove any existing slides to prevent form element conflicts
+			const existingSlides = mainContainer.querySelectorAll(
+				".fmd-slide:not(.fmd-first-slide)",
+			);
+			existingSlides.forEach((slide) => {
+				if (slide !== slideElement) {
+					slide.remove();
+				}
+			});
+
+			mainContainer.appendChild(slideElement);
+
+			// Process the slide content (markdown, etc.)
+			instance.processSlideContent(slideElement);
+
+			// Add event listeners to the new slide
+			instance.addEventListeners(slideElement, false);
+
+			// Update available slides count
+			instance.state.slideData.availableSlides++;
+
+			// ✅ ADD: Fade transition call here
+			// Get the current active slide for transition
+			const activeSlide = instance.container.querySelector(".fmd-slide-active");
+			if (activeSlide) {
+				// Trigger fade out of current slide and fade in of new slide
+				instance.fadeInNextSlide(activeSlide, slideElement);
+			}
+		}
+
+		// Store question data in cache if not end slide and has questionId
+		if (slideType === "question" && questionData && questionData.questionId) {
+			instance.state.lifecycle.questionCache.set(questionData.questionId, {
+				questionData,
+				slideDefinition,
+				slideElement: null, // Will be set when destroyed
+			});
+		}
+
+		return slideElement;
+	};
+
+	/**
+	 * Lifecycle Manager - Destroy question and cache it
+	 */
+	destroyQuestionLifecycle = (slideElement) => {
+		const instance = this;
+
+		if (!slideElement) {
+			return;
+		}
+
+		// Store the slide element in cache for potential reuse
+		const questionId = slideElement
+			.querySelector("[data-fmd-name]")
+			?.getAttribute("data-fmd-name");
+		if (questionId && instance.state.lifecycle.questionCache.has(questionId)) {
+			const cachedQuestion =
+				instance.state.lifecycle.questionCache.get(questionId);
+			cachedQuestion.slideElement = slideElement.cloneNode(true);
+		}
+
+		// Remove from DOM
+		slideElement.remove();
+	};
+
+	/**
+	 * Get the currently active slide
+	 */
+	getActiveSlide = () => {
+		const instance = this;
+		return instance.container.querySelector(".fmd-slide-active");
+	};
+
+	/**
+	 * Reset button processing state - ensures all buttons are enabled and functional
+	 */
+	resetButtonProcessingState = () => {
+		const instance = this;
+		const rootElem = instance.container.querySelector(".fmd-root");
+
+		// Remove processing state from all buttons
+		const processingButtons = instance.container.querySelectorAll(
+			".fmd-btn-processing",
+		);
+		processingButtons.forEach((btn) => {
+			instance.removeBtnProcessing(btn);
+		});
+
+		// Enable all clicks on root element
+		rootElem.removeEventListener("click", instance.disableAllClicks, true);
+
+		// Ensure the active slide's buttons are clean and functional
+		const activeSlide = instance.getActiveSlide();
+
+		if (activeSlide) {
+			// Remove any lingering processing classes from the active slide
+			const activeSlideButtons = activeSlide.querySelectorAll(
+				".fmd-btn-processing",
+			);
+
+			activeSlideButtons.forEach((btn) => {
+				instance.removeBtnProcessing(btn);
+			});
+
+			// Log all buttons on the active slide
+			const allButtons = activeSlide.querySelectorAll(
+				"button, input[type='submit']",
+			);
+		}
+	};
+
+	/**
+	 * Show a slide (make it active)
+	 */
+	showSlide = (slideElement) => {
+		const instance = this;
+
+		// Remove active class from all slides
+		instance.container
+			.querySelectorAll(".fmd-slide-active")
+			.forEach((slide) => {
+				slide.classList.remove("fmd-slide-active");
+			});
+
+		// Add active class to the target slide
+		slideElement.classList.add("fmd-slide-active");
+
+		// Update slide index
+		const slides = instance.container.querySelectorAll(".fmd-slide");
+		const slideIndex = Array.from(slides).indexOf(slideElement);
+		if (slideIndex !== -1) {
+			instance.hasNewActiveSlide(slideElement, slideIndex, false);
+		}
+
+		// Reset button processing state for the new slide
+		instance.resetButtonProcessingState();
+	};
+
+	/**
+	 * Navigation Manager - Navigate to specific question
+	 */
+	navigateToQuestion = async (targetIndex) => {
+		const instance = this;
+		const { lifecycle } = instance.state;
+
+		if (targetIndex < 0 || targetIndex >= lifecycle.questionPath.length) {
+			console.error("Invalid question index:", targetIndex);
+			return;
+		}
+
+		const targetQuestionId = lifecycle.questionPath[targetIndex];
+		const activeSlide = instance.getActiveSlide();
+
+		// Check if question is cached
+		const cachedQuestion = lifecycle.questionCache.get(targetQuestionId);
+
+		if (cachedQuestion) {
+			// Use cached question
+			const slideElement = cachedQuestion.slideElement
+				? cachedQuestion.slideElement.cloneNode(true)
+				: instance.createNextSlide(cachedQuestion.slideDefinition, false);
+
+			// Insert into DOM
+			const mainContainer = instance.container.querySelector(
+				".fmd-main-container",
+			);
+			mainContainer.appendChild(slideElement);
+
+			// Restore user response if exists
+			const userResponse = lifecycle.userResponses.get(targetQuestionId);
+			if (userResponse) {
+				instance.restoreUserResponse(slideElement, userResponse);
+			}
+
+			// Update state
+			lifecycle.currentQuestionIndex = targetIndex;
+			lifecycle.currentQuestion = cachedQuestion.questionData;
+			instance.state.currentQuestion = cachedQuestion.questionData;
+
+			// Use existing transition logic if we have an active slide
+			if (activeSlide) {
+				instance.fadeInNextSlide(activeSlide, slideElement);
+			} else {
+				instance.showSlide(slideElement);
+				// showSlide already calls resetButtonProcessingState
+			}
+		} else {
+			// Question not cached - this shouldn't happen for previous questions
+			console.error("Question not found in cache:", targetQuestionId);
+		}
+	};
+
+	/**
+	 * Restore user response to a slide
+	 */
+	restoreUserResponse = (slideElement, response) => {
+		const instance = this;
+
+		const formField = slideElement.querySelector(
+			`[data-fmd-name="${response.questionId}"]`,
+		);
+		if (!formField) {
+			return;
+		}
+
+		// Restore value based on field type
+		if (formField.type === "radio" || formField.type === "checkbox") {
+			if (formField.type === "radio") {
+				const radioButton = slideElement.querySelector(
+					`input[type="radio"][value="${response.value}"]`,
+				);
+				if (radioButton) {
+					radioButton.checked = true;
+				}
+			} else {
+				// Checkbox - response.value should be an array
+				const values = Array.isArray(response.value)
+					? response.value
+					: [response.value];
+				values.forEach((value) => {
+					const checkbox = slideElement.querySelector(
+						`input[type="checkbox"][value="${value}"]`,
+					);
+					if (checkbox) {
+						checkbox.checked = true;
+					}
+				});
+			}
+		} else {
+			formField.value = response.value || "";
+		}
+	};
+
+	/**
+	 * Handle answer changes and branching
+	 */
+	handleAnswerChange = async (questionId, newResponse) => {
+		const instance = this;
+		const { lifecycle } = instance.state;
+
+		// Update user response
+		lifecycle.userResponses.set(questionId, newResponse);
+
+		// Find the index of the changed question
+		const changedIndex = lifecycle.questionPath.indexOf(questionId);
+		if (changedIndex === -1) {
+			return;
+		}
+
+		// Invalidate all subsequent questions (branching)
+		const questionsToInvalidate = lifecycle.questionPath.slice(
+			changedIndex + 1,
+		);
+		questionsToInvalidate.forEach((qId) => {
+			lifecycle.questionCache.delete(qId);
+			lifecycle.userResponses.delete(qId);
+		});
+
+		// Remove invalidated questions from path
+		lifecycle.questionPath.splice(changedIndex + 1);
+
+		// If we're currently on an invalidated question, go back to the changed question
+		if (lifecycle.currentQuestionIndex > changedIndex) {
+			await instance.navigateToQuestion(changedIndex);
+		}
+	};
+
+	/**
+	 * Enhanced back navigation
+	 */
+	handleBackNavigation = () => {
+		const instance = this;
+		const { lifecycle } = instance.state;
+
+		const previousIndex = lifecycle.currentQuestionIndex - 1;
+		if (previousIndex >= 0) {
+			instance.navigateToQuestion(previousIndex);
+		}
+	};
+
+	/**
+	 * Enhanced forward navigation
+	 */
+	handleForwardNavigation = () => {
+		const instance = this;
+		const { lifecycle } = instance.state;
+
+		const nextIndex = lifecycle.currentQuestionIndex + 1;
+		if (nextIndex < lifecycle.questionPath.length) {
+			instance.navigateToQuestion(nextIndex);
+		}
+	};
+
+	/**
+	 * Render welcome slide
+	 */
+	renderWelcomeSlide = (question, config) => {
+		const instance = this;
+
+		// Import the welcome screen template
+		const { createWelcomeScreen } = require("./welcome-screen-template");
+
+		// Create welcome screen HTML using the template
+		return createWelcomeScreen(config, instance.state.settings.localization);
+	};
+
+	/**
+	 * Render end slide
+	 */
+	renderEndSlide = (question, config) => {
+		const instance = this;
+		const { getTranslation } = require("./translations");
+		var nunjucks = require("nunjucks");
+
+		// Extract settings from question data
+		const title = question?.question || question?.title;
+		const content = question?.content || question?.description;
+		const buttonText =
+			question?.options?.ctaText || question?.options?.buttonText;
+		const alignment = question?.options?.alignment || "center";
+		const redirectUrl = question?.options?.redirectUrl;
+		const redirectDelay = question?.options?.redirectDelay || 3000;
+
+		// End slide template - mirrors welcome screen structure
+		const endSlideTemplate = `
+		<div
+			class="fmd-slide fmd-end-slide"
+			data-fmd-page-progress="100%"
+		>
+			<div class="fmd-grid" style="text-align: {{ alignment }};">
+				<div class="fmd-end-content">
+					{% if title %}
+					<h1 class="fmd-end-title fmd-form-question">
+						{{ title | safe }}
+					</h1>
+					{% endif %}
+					
+					{% if content %}
+					<div class="fmd-end-description fmd-form-description">
+						{{ content | safe }}
+					</div>
+					{% endif %}
+				</div>
+				
+				{% if buttonText and not redirectUrl %}
+				<div class="fmd-end-controls fmd-d-flex" style="justify-content: {% if alignment == 'left' %}flex-start{% elif alignment == 'right' %}flex-end{% else %}center{% endif %};">
+					<button type="button" class="fmd-end-btn fmd-btn fmd-btn-accent fmd-d-flex fmd-align-items-center fmd-justify-content-center">
+						{{ buttonText }}
+						<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512" class="fmd-icon fmd-ms-2 fmd-hide-rtl" aria-hidden="true" focusable="false"><path d="M273 239c9.4 9.4 9.4 24.6 0 33.9L113 433c9.4 9.4-24.6 9.4-33.9 0s-9.4-24.6 0-33.9l143-143L79 113c9.4-9.4-9.4-24.6 0-33.9s24.6-9.4 33.9 0L273 239z"/></svg>
+						<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512" class="fmd-icon fmd-ms-2 fmd-hide-ltr" aria-hidden="true" focusable="false"><path d="M47 239c9.4 9.4 9.4 24.6 0 33.9L207 433c9.4 9.4 24.6 9.4 33.9 0s9.4-24.6 0-33.9L97.9 256 241 113c9.4-9.4 9.4-24.6 0-33.9s-24.6-9.4-33.9 0L273 239z"/></svg>
+					</button>
+				</div>
+				{% endif %}
+				
+				{% if redirectUrl %}
+				<div class="fmd-end-redirect fmd-d-flex" style="justify-content: {% if alignment == 'left' %}flex-start{% elif alignment == 'right' %}flex-end{% else %}center{% endif %};">
+					<div class="fmd-end-redirect-message">
+						{{ redirectMessage | safe }}
+					</div>
+				</div>
+				{% endif %}
+			</div>
+		</div>
+		`;
+
+		// Determine button text and redirect settings
+		let finalButtonText = "";
+		let finalRedirectUrl = "";
+		let redirectMessage = "";
+
+		if (redirectUrl) {
+			finalRedirectUrl = redirectUrl;
+			redirectMessage =
+				getTranslation(
+					instance.state.settings.localization,
+					"redirecting-message",
+				) || `Redirecting in ${redirectDelay / 1000} seconds...`;
+		} else {
+			finalButtonText =
+				buttonText ||
+				getTranslation(
+					instance.state.settings.localization,
+					"create-survey-btn",
+				) ||
+				"Create a Survey";
+		}
+
+		// Use Nunjucks to render the template
+		nunjucks.configure({ autoescape: false });
+		return nunjucks.renderString(endSlideTemplate, {
+			title:
+				title ||
+				getTranslation(
+					instance.state.settings.localization,
+					"form-submitted-title",
+				),
+			content:
+				content ||
+				getTranslation(
+					instance.state.settings.localization,
+					"form-submitted-subtitle",
+				),
+			buttonText: finalButtonText,
+			alignment: alignment,
+			redirectUrl: finalRedirectUrl,
+			redirectMessage: redirectMessage,
+		});
+	};
+
+	/**
+	 * Render content slide (generic)
+	 */
+	renderContentSlide = (slideType, question, config) => {
+		const instance = this;
+
+		if (slideType === "welcome") {
+			return instance.renderWelcomeSlide(question, config);
+		} else if (slideType === "end") {
+			return instance.renderEndSlide(question, config);
+		}
+
+		return null;
+	};
+
+	/**
+	 * Handle end screen navigation
+	 */
+	handleEndNavigation = () => {
+		const instance = this;
+		// Get current question to check for redirect settings
+		const currentQuestion = instance.state.currentQuestion;
+
+		// Check if there's a redirect URL configured
+		if (currentQuestion?.options?.redirectUrl) {
+			const redirectUrl = currentQuestion.options.redirectUrl;
+			const redirectDelay = currentQuestion.options.redirectDelay || 3000;
+
+			// Redirect after delay
+			setTimeout(() => {
+				window.location.href = redirectUrl;
+			}, redirectDelay);
+		} else {
+			// Default CTA action - redirect to Forms.md or configured URL
+			const defaultCTAUrl =
+				currentQuestion?.options?.ctaUrl || "https://forms.md";
+
+			window.location.href = defaultCTAUrl;
+		}
+	};
+
+	/**
+	 * Create content slide from HTML
+	 */
+	createContentSlide = (slideHtml) => {
+		const instance = this;
+
+		// Create DOM element from HTML
+		const tempDiv = document.createElement("div");
+		tempDiv.innerHTML = slideHtml;
+		const slideElement = tempDiv.firstElementChild;
+
+		// Insert the slide into the DOM
+		const mainContainer = instance.container.querySelector(
+			".fmd-main-container",
+		);
+		mainContainer.appendChild(slideElement);
+
+		// Process the slide content (markdown, etc.)
+		instance.processSlideContent(slideElement);
+
+		// Add event listeners to the new slide
+		instance.addEventListeners(slideElement, false);
+
+		// Update available slides count
+		instance.state.slideData.availableSlides++;
+
+		return slideElement;
+	};
+
+	/**
+	 * Process slide content (markdown parsing, highlighting, etc.)
+	 *
+	 * @param {HTMLElement} slideElement
+	 */
+	processSlideContent = (slideElement) => {
+		const instance = this;
+
+		// Process markdown content
+		slideElement.querySelectorAll("markdown").forEach((markdownElement) => {
+			const content = markdownElement.innerHTML;
+
+			// Parse markdown
+			marked.use({
+				renderer: renderer,
+				markedSettings: {
+					"css-prefix": instance.state.settings["css-prefix"],
+					"form-delimiter": instance.state.settings["form-delimiter"],
+					"id": instance.state.settings.id,
+					"localization": instance.state.settings.localization,
+				},
+			});
+
+			let parsedContent = marked.parse(content);
+
+			// Sanitize if needed
+			if (instance.options.sanitize) {
+				const DOMPurify = createDOMPurify(window);
+				parsedContent = DOMPurify.sanitize(parsedContent);
+			}
+
+			// Replace markdown element with parsed content
+			markdownElement.outerHTML = parsedContent;
+		});
+
+		// Highlight code blocks
+		slideElement.querySelectorAll("pre code").forEach((codeBlock) => {
+			hljs.highlightElement(codeBlock);
+		});
+
+		// Set heights of <textarea> elements (in case of default values)
+		slideElement
+			.querySelectorAll("textarea.fmd-form-str-input")
+			.forEach((textarea) => {
+				instance.setTextareaHeight(textarea);
+			});
 	};
 
 	/**
@@ -2319,6 +3749,10 @@ class Formsmd {
 				activeSlide.classList.remove("fmd-fade-out-to-top");
 				setTimeout(function () {
 					rootElem.classList.remove("fmd-during-slide-transition");
+
+					// RESET BUTTON PROCESSING STATE AFTER TRANSITION COMPLETES
+					// This ensures the new slide starts with clean, enabled buttons
+					instance.resetButtonProcessingState();
 				}, instance.getSlideTransitionDuration());
 			}, instance.getSlideTransitionDuration());
 		}, instance.getSlideTransitionDuration());
@@ -2346,6 +3780,10 @@ class Formsmd {
 				activeSlide.classList.remove("fmd-fade-out-to-bottom");
 				setTimeout(function () {
 					rootElem.classList.remove("fmd-during-slide-transition");
+
+					// RESET BUTTON PROCESSING STATE AFTER TRANSITION COMPLETES
+					// This ensures the restored slide starts with clean, enabled buttons
+					instance.resetButtonProcessingState();
 				}, instance.getSlideTransitionDuration());
 			}, instance.getSlideTransitionDuration());
 		}, instance.getSlideTransitionDuration());
@@ -2417,6 +3855,7 @@ class Formsmd {
 		const ctaBtn =
 			activeSlide.querySelector(".fmd-submit-btn") ||
 			activeSlide.querySelector(".fmd-next-btn");
+
 		instance.setBtnProcessing(ctaBtn);
 		const footerPreviousBtn = instance.container.querySelector(
 			".fmd-footer .fmd-previous-btn",
@@ -2452,48 +3891,137 @@ class Formsmd {
 			instance.removeSlideErrors(activeSlide);
 		}
 
-		// Get the next slide
-		// If it is the same as the active slide, add (and show) error
-		const nextSlideAndIndex = instance.getNextSlide();
-		if (activeSlide === nextSlideAndIndex.slide) {
-			// Add error
-			instance.addSlideError(activeSlide, ctaBtn, []);
+		// Get current form data for submission
+		const currentFormData = instance.getCurrentFormData(
+			activeSlide,
+			instance.state.currentQuestion,
+		);
 
-			// Remove all buttons from their processing states
-			instance.container
-				.querySelectorAll(".fmd-btn-processing")
-				.forEach((btn) => {
-					instance.removeBtnProcessing(btn);
-				});
-
-			// Enable all clicks on root element
-			rootElem.removeEventListener("click", instance.disableAllClicks, true);
-
-			return;
+		// Store user response in lifecycle state
+		if (currentFormData && instance.state.currentQuestion) {
+			instance.state.lifecycle.userResponses.set(
+				instance.state.currentQuestion.questionId,
+				currentFormData,
+			);
 		}
+
+		// Get the next question from API
+		instance
+			.getNextQuestionFromAPI(currentFormData)
+			.then((nextSlideData) => {
+				// Check if we have a next slide definition
+				if (!nextSlideData.slideDefinition) {
+					// No more slides available
+					instance.addSlideError(activeSlide, ctaBtn, []);
+
+					// Remove all buttons from their processing states
+					instance.container
+						.querySelectorAll(".fmd-btn-processing")
+						.forEach((btn) => {
+							instance.removeBtnProcessing(btn);
+						});
+
+					// Enable all clicks on root element
+					rootElem.removeEventListener(
+						"click",
+						instance.disableAllClicks,
+						true,
+					);
+
+					return;
+				}
+
+				// Detect slide type from API response
+				const slideType = nextSlideData.question.slideType || "question";
+				instance.state.lifecycle.currentSlideType = slideType;
+
+				// Check if this is the last question based on progress data
+				const isLastQuestion =
+					nextSlideData.progress?.isLastQuestion ||
+					nextSlideData.progress?.currentQuestion >=
+						nextSlideData.progress?.totalQuestions;
+
+				// Add to question path if it's a new question (not welcome/end)
+				if (
+					slideType === "question" &&
+					nextSlideData.question &&
+					nextSlideData.question.questionId
+				) {
+					instance.state.lifecycle.questionPath.push(
+						nextSlideData.question.questionId,
+					);
+					instance.state.lifecycle.currentQuestionIndex =
+						instance.state.lifecycle.questionPath.length - 1;
+				}
+
+				// Create the next slide with lifecycle management
+				const nextSlide = instance.createQuestionLifecycle(
+					nextSlideData.question,
+					nextSlideData.slideDefinition,
+					nextSlideData.isEndSlide,
+					slideType,
+				);
+
+				// Update the current question data in state
+				instance.state.currentQuestion = nextSlideData.question;
+				instance.state.lifecycle.currentQuestion = nextSlideData.question;
+
+				// Store progress data from API response
+				instance.state.progress = nextSlideData.progress;
+
+				// Continue with the rest of the process
+				instance.handleNextSlideSuccess(activeSlide, nextSlide, nextSlideData);
+			})
+			.catch((error) => {
+				console.error("❌ Error getting next question:", error);
+
+				// Add error to the slide
+				instance.addSlideError(activeSlide, ctaBtn, [
+					"Failed to load next question. Please try again.",
+				]);
+
+				// Remove all buttons from their processing states
+				instance.container
+					.querySelectorAll(".fmd-btn-processing")
+					.forEach((btn) => {
+						instance.removeBtnProcessing(btn);
+					});
+
+				// Enable all clicks on root element
+				rootElem.removeEventListener("click", instance.disableAllClicks, true);
+			});
+
+		return; // Exit early since we're handling the async flow
+	};
+
+	/**
+	 * Handle successful next slide creation
+	 *
+	 * @param {HTMLElement} activeSlide
+	 * @param {HTMLElement} nextSlide
+	 * @param {Object} nextSlideData
+	 */
+	handleNextSlideSuccess = (activeSlide, nextSlide, nextSlideData) => {
+		const instance = this;
+		const rootElem = instance.container.querySelector(".fmd-root");
 
 		// POST form data
 		const postCondition =
 			instance.state.settings.page === "form-slides" &&
-			(activeSlide.hasAttribute("data-fmd-post") ||
-				nextSlideAndIndex.slide.classList.contains("fmd-end-slide"))
+			(activeSlide.hasAttribute("data-fmd-post") || nextSlideData.isEndSlide)
 				? true
 				: false;
 		instance
-			.postFormData(
-				postCondition,
-				nextSlideAndIndex.slide.classList.contains("fmd-end-slide"),
-			)
+			.postFormData(postCondition, nextSlideData.isEndSlide)
 			.then((promiseResult) => {
 				// Success
 				if (promiseResult.ok) {
 					// If next slide is the end slide: remove response id, remove form
 					// data from local storage, and redirect (if applicable)
-					if (nextSlideAndIndex.slide.classList.contains("fmd-end-slide")) {
+					if (nextSlideData.isEndSlide) {
 						instance.removeResponseId();
 						instance.removeSavedFormData();
-						const redirect =
-							nextSlideAndIndex.slide.getAttribute("data-fmd-redirect");
+						const redirect = nextSlide.getAttribute("data-fmd-redirect");
 						if (redirect) {
 							window.location.href = redirect;
 							return;
@@ -2501,12 +4029,12 @@ class Formsmd {
 					}
 
 					// Fade in next slide
-					instance.fadeInNextSlide(activeSlide, nextSlideAndIndex.slide);
+					instance.fadeInNextSlide(activeSlide, nextSlide);
 
 					// Handle the new active slide
 					instance.hasNewActiveSlide(
-						nextSlideAndIndex.slide,
-						nextSlideAndIndex.index,
+						nextSlide,
+						nextSlideData.progress?.currentQuestion || 1,
 						false,
 					);
 				}
@@ -2522,36 +4050,31 @@ class Formsmd {
 					instance.addSlideError(activeSlide, ctaBtn, errorMessages);
 				}
 
-				// Remove all buttons from their processing states
-				instance.container
-					.querySelectorAll(".fmd-btn-processing")
-					.forEach((btn) => {
-						instance.removeBtnProcessing(btn);
-					});
-
-				// Enable all clicks on root element
+				// Button processing state is now reset in fadeInNextSlide after transition completes
 				// Call the on completion function if end slide
-				// Timeout makes sure that the slide animation has completed
-				setTimeout(function () {
-					rootElem.removeEventListener(
-						"click",
-						instance.disableAllClicks,
-						true,
-					);
-					if (nextSlideAndIndex.slide.classList.contains("fmd-end-slide")) {
+				if (nextSlideData.isEndSlide) {
+					setTimeout(function () {
 						instance.onCompletion(promiseResult.json);
-					}
-				}, instance.getSlideTransitionDuration() * 3);
+					}, instance.getSlideTransitionDuration() * 3);
+				}
 			});
 	};
 
 	/**
-	 * Go to the previous slide.
+	 * Go to the previous slide using lifecycle management.
 	 *
 	 * @param {HTMLElement} activeSlide
 	 */
 	prevSlide = (activeSlide) => {
 		const instance = this;
+		const { lifecycle } = instance.state;
+
+		// Check if we can go back
+		const previousIndex = lifecycle.currentQuestionIndex - 1;
+		if (previousIndex < 0) {
+			console.error("Cannot go back - already at first question");
+			return;
+		}
 
 		// Disable all clicks on root element
 		const rootElem = instance.container.querySelector(".fmd-root");
@@ -2575,13 +4098,8 @@ class Formsmd {
 			instance.setBtnProcessing(footerNextBtn);
 		}
 
-		// Get the previous slide
-		// If it is the same as the active slide, log error
-		const prevSlideAndIndex = instance.getPrevSlide();
-		if (activeSlide === prevSlideAndIndex.slide) {
-			// Log error
-			console.error("Something went wrong. Please try again.");
-
+		// Use lifecycle navigation
+		instance.navigateToQuestion(previousIndex).then(() => {
 			// Remove all buttons from their processing states
 			instance.container
 				.querySelectorAll(".fmd-btn-processing")
@@ -2590,33 +4108,11 @@ class Formsmd {
 				});
 
 			// Enable all clicks on root element
-			rootElem.removeEventListener("click", instance.disableAllClicks, true);
-
-			return;
-		}
-
-		// Fade in previous slide
-		instance.fadeInPrevSlide(activeSlide, prevSlideAndIndex.slide);
-
-		// Handle the new active slide
-		instance.hasNewActiveSlide(
-			prevSlideAndIndex.slide,
-			prevSlideAndIndex.index,
-			false,
-		);
-
-		// Remove all buttons from their processing states
-		instance.container
-			.querySelectorAll(".fmd-btn-processing")
-			.forEach((btn) => {
-				instance.removeBtnProcessing(btn);
-			});
-
-		// Enable all clicks on root element
-		// Timeout makes sure that the slide animation has completed
-		setTimeout(function () {
-			rootElem.removeEventListener("click", instance.disableAllClicks, true);
-		}, instance.getSlideTransitionDuration() * 3);
+			// Timeout makes sure that the slide animation has completed
+			setTimeout(function () {
+				rootElem.removeEventListener("click", instance.disableAllClicks, true);
+			}, instance.getSlideTransitionDuration() * 3);
+		});
 	};
 
 	/**
@@ -2664,6 +4160,11 @@ class Formsmd {
 	addEventListeners = (container, fromInit) => {
 		const instance = this;
 
+		console.log(
+			"🔘 DEBUG: addEventListeners called with container:",
+			container,
+		);
+
 		if (fromInit) {
 			// Blur header when scrolling over content
 			// This is done only for full page (header is always blurred inline)
@@ -2691,25 +4192,6 @@ class Formsmd {
 				.querySelectorAll(".fmd-toggle-color-scheme-btn")
 				.forEach((btn) => {
 					btn.addEventListener("click", instance.toggleColorScheme);
-				});
-
-			// <form> submit
-			instance.container.querySelectorAll("form.fmd-slide").forEach((form) => {
-				form.addEventListener("submit", function (e) {
-					instance.nextSlide(e.target);
-				});
-			});
-
-			// Slide next buttons
-			instance.container
-				.querySelectorAll(".fmd-slide .fmd-next-btn")
-				.forEach((btn) => {
-					btn.addEventListener("click", function (e) {
-						if (!btn.classList.contains("fmd-btn-processing")) {
-							const parentSlide = btn.closest(".fmd-slide");
-							instance.nextSlide(parentSlide);
-						}
-					});
 				});
 
 			// Footer previous button
@@ -2753,6 +4235,96 @@ class Formsmd {
 				});
 			});
 		}
+
+		// <form> submit - ALWAYS add these listeners (not just on init)
+		let forms = container.querySelectorAll("form");
+		// If the container itself is a form, include it
+		if (container.tagName === "FORM") {
+			forms = [container, ...forms];
+		}
+
+		forms.forEach((form, index) => {
+			form.addEventListener("submit", function (e) {
+				e.preventDefault();
+
+				instance.nextSlide(e.target);
+			});
+		});
+
+		// Slide next buttons - ALWAYS add these listeners (not just on init)
+		const nextButtons = container.querySelectorAll(".fmd-slide .fmd-next-btn");
+		console.log(
+			"🔘 DEBUG: Found next buttons for event listeners:",
+			nextButtons.length,
+		);
+		nextButtons.forEach((btn, index) => {
+			console.log(
+				`🔘 DEBUG: Adding click listener to next button ${index}:`,
+				btn,
+			);
+			btn.addEventListener("click", function (e) {
+				if (!btn.classList.contains("fmd-btn-processing")) {
+					const parentSlide = btn.closest(".fmd-slide");
+					instance.nextSlide(parentSlide);
+				}
+			});
+		});
+
+		// Welcome screen buttons - use direct API call
+		const welcomeButtons = container.querySelectorAll(".fmd-welcome-btn");
+		console.log(
+			"🔘 DEBUG: Found welcome buttons for event listeners:",
+			welcomeButtons.length,
+		);
+		welcomeButtons.forEach((btn, index) => {
+			console.log(
+				`🔘 DEBUG: Adding click listener to welcome button ${index}:`,
+				btn,
+			);
+			btn.addEventListener("click", async function (e) {
+				// Disable the button to prevent multiple clicks
+				btn.disabled = true;
+
+				// For welcome screens, send current question ID with "started" value
+				const welcomeData = {
+					value: "started",
+					questionId: instance.state.currentQuestion?.questionId,
+				};
+
+				try {
+					// Get next question from API
+					const nextQuestionData =
+						await instance.getNextQuestionFromAPI(welcomeData);
+
+					// Process the response and create next slide
+					if (nextQuestionData.question && nextQuestionData.slideDefinition) {
+						instance.processQuestionResponse(nextQuestionData);
+					} else {
+						console.error("❌ No valid question data received from API");
+						btn.disabled = false; // Re-enable button on error
+					}
+				} catch (error) {
+					console.error("❌ Error getting next question:", error);
+					btn.disabled = false; // Re-enable button on error
+				}
+			});
+		});
+
+		// End screen buttons - ALWAYS add these listeners
+		const endButtons = container.querySelectorAll(".fmd-end-btn");
+		console.log(
+			"🔘 DEBUG: Found end buttons for event listeners:",
+			endButtons.length,
+		);
+		endButtons.forEach((btn, index) => {
+			console.log(
+				`🔘 DEBUG: Adding click listener to end button ${index}:`,
+				btn,
+			);
+			btn.addEventListener("click", function (e) {
+				instance.handleEndNavigation();
+			});
+		});
 
 		// Copy buttons
 		container.querySelectorAll(".fmd-copy-btn").forEach((btn) => {
@@ -2862,13 +4434,17 @@ class Formsmd {
 		// Set the state to defaults
 		instance.setStateToDefaults();
 
-		// Initialize settings
-		const parsedTemplateAndSettings = parseSettings(instance._template);
-		instance.template = parsedTemplateAndSettings.template;
-		instance.state.settings = {
-			...instance.state.settings,
-			...parsedTemplateAndSettings.settings,
-		};
+		// Check if we have API configuration
+		if (instance.options.isApiDriven && instance.options.surveyId) {
+			instance.initializeWithApiConfig({
+				surveyId: instance.options.surveyId,
+				apiBaseUrl: instance.options.apiBaseUrl || "http://localhost:3001",
+			});
+			return; // Skip traditional initialization for API-driven mode
+		} else {
+			// Initialize from API instead of static template
+			instance.initializeFromAPI();
+		}
 
 		// Add the root and body in case of inline
 		if (!instance.options.isFullPage) {
@@ -3187,6 +4763,239 @@ class Formsmd {
 
 		instance._init(true);
 	};
+
+	/**
+	 * Process question response and create the next slide
+	 *
+	 * @param {Object} questionData - The question data from API
+	 */
+	processQuestionResponse = (questionData) => {
+		const instance = this;
+		const rootElem = instance.container.querySelector(".fmd-root");
+
+		// Check if we have a slide definition
+		if (!questionData.slideDefinition) {
+			console.error("❌ No slide definition in question data");
+			return;
+		}
+
+		// Get the current active slide
+		const activeSlide = instance.container.querySelector(".fmd-slide-active");
+		if (!activeSlide) {
+			console.error("❌ No active slide found");
+			return;
+		}
+
+		// Detect slide type from API response
+		const slideType = questionData.question.slideType || "question";
+		instance.state.lifecycle.currentSlideType = slideType;
+
+		// Add to question path if it's a new question (not welcome/end)
+		if (
+			slideType === "question" &&
+			questionData.question &&
+			questionData.question.questionId
+		) {
+			instance.state.lifecycle.questionPath.push(
+				questionData.question.questionId,
+			);
+			instance.state.lifecycle.currentQuestionIndex =
+				instance.state.lifecycle.questionPath.length - 1;
+		}
+
+		// Create the next slide with lifecycle management
+		const nextSlide = instance.createQuestionLifecycle(
+			questionData.question,
+			questionData.slideDefinition,
+			questionData.isEndSlide,
+			slideType,
+		);
+
+		// Update the current question data in state
+		instance.state.currentQuestion = questionData.question;
+		instance.state.lifecycle.currentQuestion = questionData.question;
+
+		// Use the same fade transition system that works for welcome screens
+		// This ensures consistent fade out/in transitions across all slide types
+		instance.fadeInNextSlide(activeSlide, nextSlide);
+
+		// Handle the new active slide after transition completes
+		setTimeout(() => {
+			instance.hasNewActiveSlide(
+				nextSlide,
+				questionData.progress?.currentQuestion || 1,
+				false,
+			);
+		}, instance.getSlideTransitionDuration() * 3);
+	};
+}
+
+/**
+ * Convert hex color to RGB object
+ * @param {string} hex - Hex color string
+ * @returns {Object|null} RGB object with r, g, b properties or null if invalid
+ */
+function hexToRgb(hex) {
+	const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
+	return result
+		? {
+				r: parseInt(result[1], 16),
+				g: parseInt(result[2], 16),
+				b: parseInt(result[3], 16),
+			}
+		: null;
+}
+
+/**
+ * Fetch survey data from API
+ * @param {string} surveyId - The survey ID
+ * @param {string} apiBaseUrl - The API base URL
+ * @returns {Promise<Object>} Survey data
+ */
+async function fetchSurveyData(surveyId, apiBaseUrl) {
+	try {
+		const response = await fetch(
+			`${apiBaseUrl}/api/public/surveys/${surveyId}`,
+		);
+
+		if (!response.ok) {
+			throw new Error(`HTTP error! status: ${response.status}`);
+		}
+
+		const result = await response.json();
+
+		if (result.success && result.data) {
+			return result.data;
+		}
+
+		throw new Error("Invalid survey API response format");
+	} catch (error) {
+		console.error("❌ Error fetching survey data:", error);
+		throw error;
+	}
+}
+
+/**
+ * Fetch next question from API
+ * @param {string} surveyId - The survey ID
+ * @param {string} apiBaseUrl - The API base URL
+ * @param {Object} currentResponse - Current question response
+ * @returns {Promise<Object>} Next question data
+ */
+async function fetchNextQuestion(surveyId, apiBaseUrl, currentResponse = null) {
+	try {
+		const requestBody = {
+			sessionId: "test-session",
+		};
+
+		// Add current question response if provided
+		if (currentResponse) {
+			requestBody.currentQuestionId = currentResponse.questionId;
+			requestBody.response = {
+				value: currentResponse.value,
+				timeSpent: currentResponse.timeSpent || 0,
+			};
+		}
+
+		const response = await fetch(
+			`${apiBaseUrl}/api/public/surveys/${surveyId}/question`,
+			{
+				method: "POST",
+				headers: {
+					"Content-Type": "application/json",
+				},
+				body: JSON.stringify(requestBody),
+			},
+		);
+
+		if (!response.ok) {
+			throw new Error(`HTTP error! status: ${response.status}`);
+		}
+
+		const result = await response.json();
+
+		if (result.success && result.data) {
+			const { status, question, progress } = result.data;
+
+			if (status === "question" && question) {
+				const slideDefinition = convertAPIQuestionToSlideDefinition(question);
+				const isEndSlide = progress.isLastQuestion;
+
+				return {
+					question: question,
+					slideDefinition: slideDefinition,
+					isEndSlide: isEndSlide,
+					progress: progress,
+				};
+			} else if (status === "completed") {
+				return {
+					question: null,
+					slideDefinition: null,
+					isEndSlide: true,
+					progress: progress,
+				};
+			}
+		}
+
+		throw new Error("Invalid API response format");
+	} catch (error) {
+		console.error("❌ Error fetching next question:", error);
+		throw error;
+	}
+}
+
+/**
+ * Convert API question to slide definition format
+ * @param {Object} question - The question object from API
+ * @returns {string} slide definition in markdown format
+ */
+function convertAPIQuestionToSlideDefinition(question) {
+	// Map API question types to FormsMD field types
+	const fieldTypeMap = {
+		text_input: "TextInput",
+		email_input: "EmailInput",
+		number_input: "NumberInput",
+		choice_input: "ChoiceInput",
+		rating_input: "RatingInput",
+		opinion_scale: "OpinionScale",
+		datetime_input: "DateTimeInput",
+		file_input: "FileInput",
+	};
+
+	const fieldType = fieldTypeMap[question.type] || "TextInput";
+
+	// Build the slide definition
+	let slideDefinition = `\n`;
+
+	// Add progress if available
+	if (question.order) {
+		slideDefinition += `|> ${Math.round((question.order / 5) * 100)}%\n\n`;
+	}
+
+	// Build the field definition
+	slideDefinition += `${question.questionId}${question.required ? "\\*" : ""} = ${fieldType}(\n`;
+	slideDefinition += `| question = ${question.question}\n`;
+
+	// Add field-specific properties
+	if (
+		question.type === "choice_input" &&
+		question.options &&
+		question.options.choices
+	) {
+		const choices = question.options.choices.map((choice) => choice.text);
+		slideDefinition += `| choices = ${choices.join(", ")}\n`;
+	} else if (question.type === "choice_input" && question.choices) {
+		// Fallback for old format
+		slideDefinition += `| choices = ${question.choices.join(", ")}\n`;
+	}
+
+	if (question.description) {
+		slideDefinition += `| description = ${question.description}\n`;
+	}
+
+	slideDefinition += `)\n`;
+
+	return slideDefinition;
 }
 
 exports.Formsmd = Formsmd;

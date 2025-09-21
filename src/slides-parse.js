@@ -353,5 +353,110 @@ function parseSlides(
 	return slides.join("\n");
 }
 
+/**
+ * Parse slides for lazy loading - returns first slide HTML and stores definitions
+ *
+ * @param {string} template
+ * @param {boolean} isForm
+ * @param {{showRestartBtn: boolean, submitBtnText: string}} btnSettings
+ * @param {string} localization
+ * @param {string} slideDelimiter
+ * @returns {{firstSlideHtml: string, slideDefinitions: Array, endSlideDefinition: string}} first slide HTML and slide definitions
+ */
+function parseSlidesLazy(
+	template,
+	isForm,
+	btnSettings,
+	localization,
+	slideDelimiter,
+) {
+	const slideDefinitions = [];
+	let endSlideDefinition = "";
+	let firstSlideHtml = "";
+
+	// Debug logging
+
+	// Go through each slide
+	const templateSplit = template.split(slideDelimiter);
+
+	for (let i = 0; i < templateSplit.length; i++) {
+		const slide = templateSplit[i];
+		const isFirstSlide = i === 0 ? true : false;
+
+		if (isFirstSlide) {
+			// Parse first slide immediately
+			const parsedSlide = parseSlide(
+				slide,
+				isForm,
+				isFirstSlide,
+				btnSettings,
+				localization,
+			);
+			firstSlideHtml = parsedSlide.template;
+		} else {
+			// Store slide definitions for later rendering
+			slideDefinitions.push(slide);
+		}
+	}
+
+	// Handle end slide definition
+
+	if (slideDefinitions.length > 0) {
+		const lastSlide = slideDefinitions.pop();
+
+		const parsedLastSlide = parseSlide(
+			lastSlide,
+			isForm,
+			false,
+			btnSettings,
+			localization,
+		);
+
+		if (parsedLastSlide.slideType === "end") {
+			endSlideDefinition = lastSlide;
+		} else {
+			// If last slide is not an end slide, add it back
+			slideDefinitions.push(lastSlide);
+
+			// Don't set endSlideDefinition - will use null to trigger default end slide
+		}
+	}
+
+	return {
+		firstSlideHtml: firstSlideHtml,
+		slideDefinitions: slideDefinitions,
+		endSlideDefinition: endSlideDefinition,
+	};
+}
+
+/**
+ * Render a slide from its definition
+ *
+ * @param {string} slideDefinition
+ * @param {boolean} isForm
+ * @param {boolean} isFirstSlide
+ * @param {{showRestartBtn: boolean, submitBtnText: string}} btnSettings
+ * @param {string} localization
+ * @returns {string} slide HTML
+ */
+function renderSlideFromDefinition(
+	slideDefinition,
+	isForm,
+	isFirstSlide,
+	btnSettings,
+	localization,
+) {
+	const parsedSlide = parseSlide(
+		slideDefinition,
+		isForm,
+		isFirstSlide,
+		btnSettings,
+		localization,
+	);
+	return parsedSlide.template;
+}
+
 exports.parseSlide = parseSlide;
 exports.parseSlides = parseSlides;
+exports.parseSlidesLazy = parseSlidesLazy;
+exports.renderSlideFromDefinition = renderSlideFromDefinition;

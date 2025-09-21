@@ -255,6 +255,21 @@ export class Formsmd {
 		settings: any;
 		slideData: {
 			currentIndex: number;
+			slideDefinitions: any[];
+			endSlideDefinition: string;
+			availableSlides: number;
+		};
+		lifecycle: {
+			questionCache: Map<any, any>;
+			questionPath: any[];
+			userResponses: Map<any, any>;
+			currentQuestionIndex: number;
+			currentQuestion: any;
+			currentSlideType: string;
+		};
+		surveyConfig: {
+			welcomeScreen: any;
+			endScreen: any;
 		};
 	};
 	/**
@@ -571,16 +586,239 @@ export class Formsmd {
 		index: number;
 	};
 	/**
-	 * Go through each slide (after the current one) to get the next one to make
-	 * active (depending on the jump condition).
+	 * Get survey settings and theme from API
 	 *
-	 * @returns {{slide: HTMLElement, index: number}} the next slide and its
-	 * index
+	 * @returns {Promise<Object>} survey data
 	 */
-	getNextSlide: () => {
-		slide: HTMLElement;
-		index: number;
-	};
+	getSurveyFromAPI: () => Promise<any>;
+	/**
+	 * Get the next question from the API
+	 *
+	 * @param {Object} currentResponse - Current question response data
+	 * @returns {Promise<{question: Object, isEndSlide: boolean}>} the next question data
+	 */
+	getNextQuestionFromAPI: (currentResponse?: any) => Promise<{
+		question: any;
+		isEndSlide: boolean;
+	}>;
+	/**
+	 * Initialize the form from API data
+	 */
+	initializeFromAPI: () => Promise<void>;
+	/**
+	 * Initialize the form with API configuration
+	 */
+	initializeWithApiConfig: (config: any) => void;
+	template: string;
+	/**
+	 * Initialize FormsMD with configuration
+	 */
+	initWithConfig: (config: any) => void;
+	/**
+	 * Apply survey theme and settings
+	 *
+	 * @param {Object} surveyData - Survey data from API
+	 */
+	applySurveyTheme: (surveyData: any) => void;
+	/**
+	 * Get current form data for API submission using questionId-based approach
+	 *
+	 * @param {HTMLElement} activeSlide - The current active slide
+	 * @param {Object} originalQuestion - The original question object from API
+	 * @returns {Object} Form data with questionId, value, and timeSpent
+	 */
+	getCurrentFormData: (activeSlide: HTMLElement, originalQuestion?: any) => any;
+	/**
+	 * Get question type from DOM if not provided in original question
+	 *
+	 * @param {HTMLElement} activeSlide - The current active slide
+	 * @param {string} questionId - The question ID
+	 * @returns {string} Question type
+	 */
+	getQuestionTypeFromDOM: (
+		activeSlide: HTMLElement,
+		questionId: string,
+	) => string;
+	/**
+	 * Extract value based on question type using questionId
+	 *
+	 * @param {HTMLElement} activeSlide - The current active slide
+	 * @param {string} questionId - The question ID
+	 * @param {string} questionType - The question type
+	 * @param {Object} questionConfig - Question configuration (options, etc.)
+	 * @returns {string|number|Array} Extracted value
+	 */
+	extractValueByQuestionType: (
+		activeSlide: HTMLElement,
+		questionId: string,
+		questionType: string,
+		questionConfig: any,
+	) => string | number | any[];
+	/**
+	 * Extract value from choice input (radio/checkbox)
+	 *
+	 * @param {HTMLElement} activeSlide - The current active slide
+	 * @param {string} questionId - The question ID
+	 * @param {Object} questionConfig - Question configuration
+	 * @returns {string|Array} Extracted value
+	 */
+	extractChoiceInputValue: (
+		activeSlide: HTMLElement,
+		questionId: string,
+		questionConfig: any,
+	) => string | any[];
+	/**
+	 * Extract value from text input
+	 *
+	 * @param {HTMLElement} activeSlide - The current active slide
+	 * @param {string} questionId - The question ID
+	 * @returns {string} Extracted value
+	 */
+	extractTextInputValue: (
+		activeSlide: HTMLElement,
+		questionId: string,
+	) => string;
+	/**
+	 * Extract value from number input
+	 *
+	 * @param {HTMLElement} activeSlide - The current active slide
+	 * @param {string} questionId - The question ID
+	 * @returns {number|null} Extracted value
+	 */
+	extractNumberInputValue: (
+		activeSlide: HTMLElement,
+		questionId: string,
+	) => number | null;
+	/**
+	 * Extract value from rating input
+	 *
+	 * @param {HTMLElement} activeSlide - The current active slide
+	 * @param {string} questionId - The question ID
+	 * @returns {number|null} Extracted value
+	 */
+	extractRatingInputValue: (
+		activeSlide: HTMLElement,
+		questionId: string,
+	) => number | null;
+	/**
+	 * Extract value from datetime input
+	 *
+	 * @param {HTMLElement} activeSlide - The current active slide
+	 * @param {string} questionId - The question ID
+	 * @returns {string} Extracted value
+	 */
+	extractDateTimeInputValue: (
+		activeSlide: HTMLElement,
+		questionId: string,
+	) => string;
+	/**
+	 * Extract value from file input
+	 *
+	 * @param {HTMLElement} activeSlide - The current active slide
+	 * @param {string} questionId - The question ID
+	 * @returns {string} Extracted value
+	 */
+	extractFileInputValue: (
+		activeSlide: HTMLElement,
+		questionId: string,
+	) => string;
+	/**
+	 * Set up the basic DOM structure for API-driven mode
+	 */
+	setupApiDrivenStructure: () => void;
+	/**
+	 * Set up the basic form structure
+	 */
+	setupFormStructure: () => void;
+	/**
+	 * Convert API question to slide definition format
+	 *
+	 * @param {Object} question - The question object from API
+	 * @returns {string} slide definition in markdown format
+	 */
+	convertAPIQuestionToSlideDefinition: (question: any) => string;
+	/**
+	 * Create the next slide from its definition and insert it into the DOM
+	 *
+	 * @param {string} slideDefinition
+	 * @param {boolean} isEndSlide
+	 * @returns {HTMLElement} the created slide element
+	 */
+	createNextSlide: (
+		slideDefinition: string,
+		isEndSlide: boolean,
+	) => HTMLElement;
+	/**
+	 * Lifecycle Manager - Create question with caching
+	 */
+	createQuestionLifecycle: (
+		questionData: any,
+		slideDefinition: any,
+		isEndSlide?: boolean,
+		slideType?: string,
+	) => Element;
+	/**
+	 * Lifecycle Manager - Destroy question and cache it
+	 */
+	destroyQuestionLifecycle: (slideElement: any) => void;
+	/**
+	 * Get the currently active slide
+	 */
+	getActiveSlide: () => Element;
+	/**
+	 * Reset button processing state - ensures all buttons are enabled and functional
+	 */
+	resetButtonProcessingState: () => void;
+	/**
+	 * Show a slide (make it active)
+	 */
+	showSlide: (slideElement: any) => void;
+	/**
+	 * Navigation Manager - Navigate to specific question
+	 */
+	navigateToQuestion: (targetIndex: any) => Promise<void>;
+	/**
+	 * Restore user response to a slide
+	 */
+	restoreUserResponse: (slideElement: any, response: any) => void;
+	/**
+	 * Handle answer changes and branching
+	 */
+	handleAnswerChange: (questionId: any, newResponse: any) => Promise<void>;
+	/**
+	 * Enhanced back navigation
+	 */
+	handleBackNavigation: () => void;
+	/**
+	 * Enhanced forward navigation
+	 */
+	handleForwardNavigation: () => void;
+	/**
+	 * Render welcome slide
+	 */
+	renderWelcomeSlide: (question: any, config: any) => string;
+	/**
+	 * Render end slide
+	 */
+	renderEndSlide: (question: any, config: any) => any;
+	/**
+	 * Render content slide (generic)
+	 */
+	renderContentSlide: (slideType: any, question: any, config: any) => any;
+	/**
+	 * Handle end screen navigation
+	 */
+	handleEndNavigation: () => void;
+	/**
+	 * Create content slide from HTML
+	 */
+	createContentSlide: (slideHtml: any) => Element;
+	/**
+	 * Process slide content (markdown parsing, highlighting, etc.)
+	 *
+	 * @param {HTMLElement} slideElement
+	 */
+	processSlideContent: (slideElement: HTMLElement) => void;
 	/**
 	 * Get the CSS slide transition duration (in milliseconds).
 	 *
@@ -648,7 +886,19 @@ export class Formsmd {
 	 */
 	nextSlide: (activeSlide: HTMLElement) => void;
 	/**
-	 * Go to the previous slide.
+	 * Handle successful next slide creation
+	 *
+	 * @param {HTMLElement} activeSlide
+	 * @param {HTMLElement} nextSlide
+	 * @param {Object} nextSlideData
+	 */
+	handleNextSlideSuccess: (
+		activeSlide: HTMLElement,
+		nextSlide: HTMLElement,
+		nextSlideData: any,
+	) => void;
+	/**
+	 * Go to the previous slide using lifecycle management.
 	 *
 	 * @param {HTMLElement} activeSlide
 	 */
@@ -678,9 +928,14 @@ export class Formsmd {
 	 * @param {boolean} isFirstInit
 	 */
 	_init: (isFirstInit: boolean) => void;
-	template: string;
 	/**
 	 * Initialize for the first time.
 	 */
 	init: () => void;
+	/**
+	 * Process question response and create the next slide
+	 *
+	 * @param {Object} questionData - The question data from API
+	 */
+	processQuestionResponse: (questionData: any) => void;
 }

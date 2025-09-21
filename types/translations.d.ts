@@ -39,6 +39,9 @@ export namespace translations {
 		"star-plural": string;
 		"star-singular": string;
 		"start-btn": string;
+		"start-survey-btn": string;
+		"create-survey-btn": string;
+		"redirecting-message": string;
 		"text-input-placeholder": string;
 		"textarea-new-line-text": string;
 		"time-input-error": string;
@@ -85,6 +88,7 @@ export namespace translations {
 		"star-plural": string;
 		"star-singular": string;
 		"start-btn": string;
+		"start-survey-btn": string;
 		"text-input-placeholder": string;
 		"textarea-new-line-text": string;
 		"time-input-error": string;
@@ -131,6 +135,7 @@ export namespace translations {
 		"star-plural": string;
 		"star-singular": string;
 		"start-btn": string;
+		"start-survey-btn": string;
 		"text-input-placeholder": string;
 		"textarea-new-line-text": string;
 		"time-input-error": string;
@@ -177,6 +182,7 @@ export namespace translations {
 		"star-plural": string;
 		"star-singular": string;
 		"start-btn": string;
+		"start-survey-btn": string;
 		"text-input-placeholder": string;
 		"textarea-new-line-text": string;
 		"time-input-error": string;
@@ -223,6 +229,7 @@ export namespace translations {
 		"star-plural": string;
 		"star-singular": string;
 		"start-btn": string;
+		"start-survey-btn": string;
 		"text-input-placeholder": string;
 		"textarea-new-line-text": string;
 		"time-input-error": string;
@@ -269,6 +276,7 @@ export namespace translations {
 		"star-plural": string;
 		"star-singular": string;
 		"start-btn": string;
+		"start-survey-btn": string;
 		"text-input-placeholder": string;
 		"textarea-new-line-text": string;
 		"time-input-error": string;
@@ -315,6 +323,7 @@ export namespace translations {
 		"star-plural": string;
 		"star-singular": string;
 		"start-btn": string;
+		"start-survey-btn": string;
 		"text-input-placeholder": string;
 		"textarea-new-line-text": string;
 		"time-input-error": string;
@@ -361,6 +370,7 @@ export namespace translations {
 		"star-plural": string;
 		"star-singular": string;
 		"start-btn": string;
+		"start-survey-btn": string;
 		"text-input-placeholder": string;
 		"textarea-new-line-text": string;
 		"time-input-error": string;
@@ -407,6 +417,7 @@ export namespace translations {
 		"star-plural": string;
 		"star-singular": string;
 		"start-btn": string;
+		"start-survey-btn": string;
 		"text-input-placeholder": string;
 		"textarea-new-line-text": string;
 		"time-input-error": string;

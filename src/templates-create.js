@@ -3,7 +3,11 @@
 const { addReservedClass } = require("./attrs-parse");
 const { parseDivs, parseBindSpans } = require("./div-span-parse");
 const { renderer } = require("./marked-renderer");
-const { parseSlides } = require("./slides-parse");
+const {
+	parseSlides,
+	parseSlidesLazy,
+	renderSlideFromDefinition,
+} = require("./slides-parse");
 const { getTranslation } = require("./translations");
 const createDOMPurify = require("dompurify");
 const { marked } = require("marked");
@@ -17,6 +21,220 @@ var nunjucks = require("nunjucks");
  */
 function createStyles(settings) {
 	const styleBlocks = [];
+
+	// Add flexbox utility classes
+	styleBlocks.push(`
+		/* Flexbox Utility Classes */
+		.fmd-d-flex {
+			display: flex !important;
+		}
+		
+		.fmd-justify-content-start {
+			justify-content: flex-start !important;
+		}
+		
+		.fmd-justify-content-center {
+			justify-content: center !important;
+		}
+		
+		.fmd-justify-content-end {
+			justify-content: flex-end !important;
+		}
+		
+		.fmd-justify-content-left {
+			justify-content: flex-start !important;
+		}
+		
+		.fmd-justify-content-right {
+			justify-content: flex-end !important;
+		}
+		
+		.fmd-align-items-center {
+			align-items: center !important;
+		}
+		
+		.fmd-ms-2 {
+			margin-left: 0.5rem !important;
+		}
+		
+		.fmd-icon {
+			width: 1em;
+			height: 1em;
+			fill: currentColor;
+		}
+		
+		.fmd-hide-rtl {
+			display: none;
+		}
+		
+		.fmd-hide-ltr {
+			display: none;
+		}
+	`);
+
+	// Add welcome screen styles
+	styleBlocks.push(`
+		/* Welcome Screen Styles */
+		.fmd-welcome-slide {
+			display: flex;
+			align-items: center;
+			justify-content: center;
+			min-height: 60vh;
+		}
+		
+		.fmd-welcome-content {
+			text-align: center;
+			max-width: 640px;
+			width: 100%;
+		}
+		
+		.fmd-welcome-content-left {
+			text-align: left;
+		}
+		
+		.fmd-welcome-content-right {
+			text-align: right;
+		}
+		
+		/* Override form question styles for welcome screen */
+		.fmd-welcome-slide .fmd-welcome-content-center .fmd-welcome-title.fmd-form-question {
+			text-align: center !important;
+		}
+		
+		.fmd-welcome-slide .fmd-welcome-content-center .fmd-welcome-description.fmd-form-description {
+			text-align: center !important;
+		}
+		
+		.fmd-welcome-slide .fmd-welcome-content-left .fmd-welcome-title.fmd-form-question {
+			text-align: left !important;
+		}
+		
+		.fmd-welcome-slide .fmd-welcome-content-left .fmd-welcome-description.fmd-form-description {
+			text-align: left !important;
+		}
+		
+		.fmd-welcome-slide .fmd-welcome-content-right .fmd-welcome-title.fmd-form-question {
+			text-align: right !important;
+		}
+		
+		.fmd-welcome-slide .fmd-welcome-content-right .fmd-welcome-description.fmd-form-description {
+			text-align: right !important;
+		}
+		
+		.fmd-welcome-title {
+			/* Typeform-inspired: More subtle hierarchy */
+			font-size: calc(var(--fmd-font-size-base) + 12px); /* 28px instead of 34px */
+			font-weight: var(--fmd-font-weight-medium); /* 500 instead of 700 */
+			line-height: 1.35; /* 1.35 instead of 1.2 - more comfortable */
+			margin-bottom: 1.25rem; /* 20px instead of 24px - more compact */
+			margin-top: 0;
+			color: var(--fmd-emphasis-color);
+		}
+		
+		.fmd-welcome-description {
+			/* Typeform-inspired: Better body text */
+			font-size: var(--fmd-font-size-lg); /* Keep 18px */
+			line-height: 1.55; /* 1.55 instead of 1.5 - more comfortable reading */
+			margin-bottom: 2rem; /* 32px instead of 40px - less dramatic spacing */
+			color: var(--fmd-body-color);
+			font-weight: var(--fmd-body-font-weight);
+		}
+		
+		.fmd-welcome-btn {
+			/* Typeform-inspired: More refined button */
+			padding: 1rem 2rem; /* 16px 32px instead of 14px 36px */
+			font-size: var(--fmd-font-size-base); /* 16px instead of 18px */
+			font-weight: var(--fmd-font-weight-medium); /* 500 instead of 600 */
+		}
+		
+		/* Responsive adjustments - Typeform-inspired */
+		@media (max-width: 768px) {
+			.fmd-welcome-title {
+				font-size: calc(var(--fmd-font-size-base) + 6px); /* 22px - Typeform mobile title size */
+			}
+			
+			.fmd-welcome-description {
+				font-size: var(--fmd-font-size-base); /* 16px - Typeform mobile description size */
+			}
+			
+			.fmd-welcome-btn {
+				padding: 1rem 2rem; /* 16px 32px - Bigger mobile button */
+				font-size: calc(var(--fmd-font-size-base) + 1px); /* 17px - Bigger mobile text */
+				font-weight: var(--fmd-font-weight-semibold); /* 600 - Bolder text */
+			}
+		}
+	`);
+
+	// Add end slide styling - mirrors welcome screen
+	styleBlocks.push(`
+		/* End slide styling - mirrors welcome screen */
+		.fmd-end-slide .fmd-end-content-center .fmd-end-title.fmd-form-question {
+			text-align: center !important;
+		}
+		
+		.fmd-end-slide .fmd-end-content-center .fmd-end-description.fmd-form-description {
+			text-align: center !important;
+		}
+		
+		.fmd-end-slide .fmd-end-content-left .fmd-end-title.fmd-form-question {
+			text-align: left !important;
+		}
+		
+		.fmd-end-slide .fmd-end-content-left .fmd-end-description.fmd-form-description {
+			text-align: left !important;
+		}
+		
+		.fmd-end-slide .fmd-end-content-right .fmd-end-title.fmd-form-question {
+			text-align: right !important;
+		}
+		
+		.fmd-end-slide .fmd-end-content-right .fmd-end-description.fmd-form-description {
+			text-align: right !important;
+		}
+		
+		.fmd-end-title {
+			/* Typeform-inspired: More subtle hierarchy */
+			font-size: calc(var(--fmd-font-size-base) + 12px); /* 28px instead of 34px */
+			font-weight: var(--fmd-font-weight-medium); /* 500 instead of 700 */
+			line-height: 1.35; /* 1.35 instead of 1.2 - more comfortable */
+			margin-bottom: 1.25rem; /* 20px instead of 24px - more compact */
+			margin-top: 0;
+			color: var(--fmd-emphasis-color);
+		}
+		
+		.fmd-end-description {
+			/* Typeform-inspired: Better body text */
+			font-size: var(--fmd-font-size-lg); /* Keep 18px */
+			line-height: 1.55; /* 1.55 instead of 1.5 - more comfortable reading */
+			margin-bottom: 2rem; /* 32px instead of 40px - less dramatic spacing */
+			color: var(--fmd-body-color);
+			font-weight: var(--fmd-body-font-weight);
+		}
+		
+		.fmd-end-btn {
+			/* Typeform-inspired: More refined button */
+			padding: 1rem 2rem; /* 16px 32px instead of 14px 36px */
+			font-size: var(--fmd-font-size-base); /* 16px instead of 18px */
+			font-weight: var(--fmd-font-weight-medium); /* 500 instead of 600 */
+		}
+		
+		/* Responsive adjustments - Typeform-inspired */
+		@media (max-width: 768px) {
+			.fmd-end-title {
+				font-size: calc(var(--fmd-font-size-base) + 6px); /* 22px - Typeform mobile title size */
+			}
+			
+			.fmd-end-description {
+				font-size: var(--fmd-font-size-base); /* 16px - Typeform mobile description size */
+			}
+			
+			.fmd-end-btn {
+				padding: 1rem 2rem; /* 16px 32px - Bigger mobile button */
+				font-size: calc(var(--fmd-font-size-base) + 1px); /* 17px - Bigger mobile text */
+				font-weight: var(--fmd-font-weight-semibold); /* 600 - Bolder text */
+			}
+		}
+	`);
 
 	// Add the font import URL
 	if (settings["font-import-url"] !== undefined) {
@@ -322,7 +540,8 @@ function createContentTemplate(template, settings, data, windowAndSanitize) {
 
 	// Parse slides
 	if (settings.page !== "single") {
-		template = parseSlides(
+		// Use lazy loading - only parse first slide and store definitions
+		const lazyResult = parseSlidesLazy(
 			template,
 			settings.page === "form-slides" ? true : false,
 			{
@@ -335,6 +554,13 @@ function createContentTemplate(template, settings, data, windowAndSanitize) {
 			settings.localization,
 			settings["slide-delimiter"],
 		);
+
+		// Store slide definitions in settings for later use
+		settings.slideDefinitions = lazyResult.slideDefinitions;
+		settings.endSlideDefinition = lazyResult.endSlideDefinition;
+
+		// Use only the first slide HTML
+		template = lazyResult.firstSlideHtml;
 	} else {
 		template = [
 			`<div class="fmd-single">`,
