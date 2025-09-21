@@ -1,5 +1,3 @@
-"use strict";
-
 /**
  * Given a string, check if it is a valid number.
  *
@@ -15,8 +13,6 @@ function isNumeric(str) {
 		!isNaN(parseFloat(str)) // Ensure strings of whitespace fail
 	);
 }
-
-exports.isNumeric = isNumeric;
 
 // The following is copied from Marked
 // https://github.com/markedjs/marked/
@@ -57,7 +53,6 @@ function cleanUrl(href) {
 }
 
 exports.escape$1 = escape$1;
-exports.cleanUrl = cleanUrl;
 
 // The following is copied from Lodash
 // https://github.com/lodash/lodash/
@@ -78,4 +73,4 @@ function unescape(string) {
 		: string || "";
 }
 
-exports.unescape = unescape;
+export { isNumeric, cleanUrl, unescape, escape$1 };

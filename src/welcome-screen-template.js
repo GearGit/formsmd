@@ -1,7 +1,5 @@
-"use strict";
-
-const { getTranslation } = require("./translations");
-var nunjucks = require("nunjucks");
+import { getTranslation  } from "./translations.js";
+import nunjucks from "nunjucks";
 
 /**
  * Welcome screen template with alignment options
@@ -78,6 +76,5 @@ function createWelcomeScreen(config, localization) {
 	});
 }
 
-module.exports = {
-	createWelcomeScreen,
-};
+export { createWelcomeScreen,
+ };

@@ -1,8 +1,5 @@
-"use strict";
-
-const { parseElemAttrs, addReservedClass } = require("./attrs-parse");
-const {
-	formFieldPattern,
+import { parseElemAttrs, addReservedClass  } from "./attrs-parse.js";
+import { formFieldPattern,
 	createTextField,
 	createNumberField,
 	createSelectField,
@@ -11,10 +8,10 @@ const {
 	createOpinionScaleField,
 	createDatetimeField,
 	createFileField,
-} = require("./form-field-create");
-const { escape$1, cleanUrl } = require("./helpers");
-const { getTranslation } = require("./translations");
-const { marked } = require("marked");
+ } from "./form-field-create.js";
+import { escape$1, cleanUrl  } from "./helpers.js";
+import { getTranslation  } from "./translations.js";
+import { marked  } from "marked";
 
 /**
  * Get settings for the Marked renderer. Settings are set in the options from
@@ -358,4 +355,4 @@ renderer.table = function (header, body) {
 	].join("\n");
 };
 
-exports.renderer = renderer;
+export { renderer };

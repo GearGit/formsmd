@@ -17,18 +17,12 @@
  * @returns {{template: string, slideType:"start"|"body"|"end"}} template with
  * parsed slides, type of the slide
  */
-export function parseSlide(
-	template: string,
-	isForm: boolean,
-	isFirstSlide: boolean,
-	btnSettings: {
-		showRestartBtn: boolean;
-		submitBtnText: string;
-	},
-	localization: string,
-): {
-	template: string;
-	slideType: "start" | "body" | "end";
+export function parseSlide(template: string, isForm: boolean, isFirstSlide: boolean, btnSettings: {
+    showRestartBtn: boolean;
+    submitBtnText: string;
+}, localization: string): {
+    template: string;
+    slideType: "start" | "body" | "end";
 };
 /**
  * Given a template string, parse the slides. Slides are created wherever the
@@ -41,16 +35,10 @@ export function parseSlide(
  * @param {string} slideDelimiter
  * @returns {string} template with parsed slides
  */
-export function parseSlides(
-	template: string,
-	isForm: boolean,
-	btnSettings: {
-		showRestartBtn: boolean;
-		submitBtnText: string;
-	},
-	localization: string,
-	slideDelimiter: string,
-): string;
+export function parseSlides(template: string, isForm: boolean, btnSettings: {
+    showRestartBtn: boolean;
+    submitBtnText: string;
+}, localization: string, slideDelimiter: string): string;
 /**
  * Parse slides for lazy loading - returns first slide HTML and stores definitions
  *
@@ -61,19 +49,13 @@ export function parseSlides(
  * @param {string} slideDelimiter
  * @returns {{firstSlideHtml: string, slideDefinitions: Array, endSlideDefinition: string}} first slide HTML and slide definitions
  */
-export function parseSlidesLazy(
-	template: string,
-	isForm: boolean,
-	btnSettings: {
-		showRestartBtn: boolean;
-		submitBtnText: string;
-	},
-	localization: string,
-	slideDelimiter: string,
-): {
-	firstSlideHtml: string;
-	slideDefinitions: any[];
-	endSlideDefinition: string;
+export function parseSlidesLazy(template: string, isForm: boolean, btnSettings: {
+    showRestartBtn: boolean;
+    submitBtnText: string;
+}, localization: string, slideDelimiter: string): {
+    firstSlideHtml: string;
+    slideDefinitions: any[];
+    endSlideDefinition: string;
 };
 /**
  * Render a slide from its definition
@@ -85,13 +67,7 @@ export function parseSlidesLazy(
  * @param {string} localization
  * @returns {string} slide HTML
  */
-export function renderSlideFromDefinition(
-	slideDefinition: string,
-	isForm: boolean,
-	isFirstSlide: boolean,
-	btnSettings: {
-		showRestartBtn: boolean;
-		submitBtnText: string;
-	},
-	localization: string,
-): string;
+export function renderSlideFromDefinition(slideDefinition: string, isForm: boolean, isFirstSlide: boolean, btnSettings: {
+    showRestartBtn: boolean;
+    submitBtnText: string;
+}, localization: string): string;

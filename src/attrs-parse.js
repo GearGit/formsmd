@@ -1,6 +1,4 @@
-"use strict";
-
-const { unescape } = require("./helpers");
+import { unescape  } from "./helpers.js";
 
 /**
  * Given a string, parse and return the attributes as a ready-for-DOM string.
@@ -106,5 +104,4 @@ function addReservedClass(tag, name) {
 	}
 }
 
-exports.parseElemAttrs = parseElemAttrs;
-exports.addReservedClass = addReservedClass;
+export { parseElemAttrs, addReservedClass };

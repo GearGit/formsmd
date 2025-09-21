@@ -1,5 +1,3 @@
-"use strict";
-
 /**
  * Given a template string, parse the data-blocks and separate them from the
  * rest of the template. The data-blocks must be provided as valid JSON inside
@@ -11,6 +9,14 @@
 function parseDataBlocks(template) {
 	const data = [];
 	let dataBlockCount = 1;
+
+	// Handle undefined, null, or non-string templates
+	if (!template || typeof template !== 'string') {
+		return {
+			template: template || "",
+			data: {}
+		};
+	}
 
 	function parseDataBlock(match, content) {
 		content = content.trim();
@@ -33,4 +39,4 @@ function parseDataBlocks(template) {
 	};
 }
 
-exports.parseDataBlocks = parseDataBlocks;
+export { parseDataBlocks };

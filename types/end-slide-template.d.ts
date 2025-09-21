@@ -11,14 +11,11 @@
  * @param {string} localization - Localization setting
  * @returns {string} End slide HTML
  */
-export function createEndSlide(
-	config: {
-		title: string;
-		content: string;
-		buttonText: string;
-		alignment: string;
-		redirectUrl: string;
-		redirectDelay: number;
-	},
-	localization: string,
-): string;
+export function createEndSlide(config: {
+    title: string;
+    content: string;
+    buttonText: string;
+    alignment: string;
+    redirectUrl: string;
+    redirectDelay: number;
+}, localization: string): string;

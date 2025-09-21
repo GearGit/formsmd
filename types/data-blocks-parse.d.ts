@@ -7,6 +7,6 @@
  * @returns {{template: string, data: Object}} rest of the template and data
  */
 export function parseDataBlocks(template: string): {
-	template: string;
-	data: any;
+    template: string;
+    data: any;
 };

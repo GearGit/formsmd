@@ -22,7 +22,7 @@ async function fetchSurveyData(surveyId, apiBaseUrl) {
 		const fetchModule = await import("node-fetch");
 
 		// Fetch basic survey data (no theme handling in build process)
-		const url = `${apiBaseUrl}/api/public/surveys/${surveyId}`;
+		const url = `${apiBaseUrl}/public/surveys/${surveyId}`;
 
 		const response = await fetchModule.default(url);
 

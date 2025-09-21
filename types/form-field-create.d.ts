@@ -11,17 +11,10 @@ export const formFieldPattern: RegExp;
  * @returns {{startTag: string, validParams: Object, restParams: Object}}
  * start tag, validated params, rest of the params
  */
-export function formFieldSetup(
-	required: boolean,
-	parsedAttrs: string,
-	params: string,
-	formDelimiter: string,
-	localization: string,
-	useFieldset: boolean,
-): {
-	startTag: string;
-	validParams: any;
-	restParams: any;
+export function formFieldSetup(required: boolean, parsedAttrs: string, params: string, formDelimiter: string, localization: string, useFieldset: boolean): {
+    startTag: string;
+    validParams: any;
+    restParams: any;
 };
 /**
  * Create a text form field. Supported types are "text", "email", "url",
@@ -38,16 +31,7 @@ export function formFieldSetup(
  * @param {string} localization
  * @returns {string} text input form field as HTML string
  */
-export function createTextField(
-	name: string,
-	inputType: "text" | "email" | "url" | "tel" | "password",
-	required: boolean,
-	parsedAttrs: string,
-	params: string,
-	formDelimiter: string,
-	id: string,
-	localization: string,
-): string;
+export function createTextField(name: string, inputType: "text" | "email" | "url" | "tel" | "password", required: boolean, parsedAttrs: string, params: string, formDelimiter: string, id: string, localization: string): string;
 /**
  * Create a number form field.
  *
@@ -60,15 +44,7 @@ export function createTextField(
  * @param {string} localization
  * @returns {string} number input form field as HTML string
  */
-export function createNumberField(
-	name: string,
-	required: boolean,
-	parsedAttrs: string,
-	params: string,
-	formDelimiter: string,
-	id: string,
-	localization: string,
-): string;
+export function createNumberField(name: string, required: boolean, parsedAttrs: string, params: string, formDelimiter: string, id: string, localization: string): string;
 /**
  * Create a select form field.
  *
@@ -81,15 +57,7 @@ export function createNumberField(
  * @param {string} localization
  * @returns {string} select box form field as HTML string
  */
-export function createSelectField(
-	name: string,
-	required: boolean,
-	parsedAttrs: string,
-	params: string,
-	formDelimiter: string,
-	id: string,
-	localization: string,
-): string;
+export function createSelectField(name: string, required: boolean, parsedAttrs: string, params: string, formDelimiter: string, id: string, localization: string): string;
 /**
  * Create a choice form field.
  *
@@ -103,16 +71,7 @@ export function createSelectField(
  * @param {string} localization
  * @returns {string} choice input form field as HTML string
  */
-export function createChoiceField(
-	name: string,
-	isPictureChoice: boolean,
-	required: boolean,
-	parsedAttrs: string,
-	params: string,
-	formDelimiter: string,
-	id: string,
-	localization: string,
-): string;
+export function createChoiceField(name: string, isPictureChoice: boolean, required: boolean, parsedAttrs: string, params: string, formDelimiter: string, id: string, localization: string): string;
 /**
  * Create a rating form field.
  *
@@ -125,15 +84,7 @@ export function createChoiceField(
  * @param {string} localization
  * @returns {string} rating input form field as HTML string
  */
-export function createRatingField(
-	name: string,
-	required: boolean,
-	parsedAttrs: string,
-	params: string,
-	formDelimiter: string,
-	id: string,
-	localization: string,
-): string;
+export function createRatingField(name: string, required: boolean, parsedAttrs: string, params: string, formDelimiter: string, id: string, localization: string): string;
 /**
  * Create an opinion scale form field.
  *
@@ -146,15 +97,7 @@ export function createRatingField(
  * @param {string} localization
  * @returns {string} opinion scale form field as HTML string
  */
-export function createOpinionScaleField(
-	name: string,
-	required: boolean,
-	parsedAttrs: string,
-	params: string,
-	formDelimiter: string,
-	id: string,
-	localization: string,
-): string;
+export function createOpinionScaleField(name: string, required: boolean, parsedAttrs: string, params: string, formDelimiter: string, id: string, localization: string): string;
 /**
  * Create a datetime, date, or time form field.
  *
@@ -168,16 +111,7 @@ export function createOpinionScaleField(
  * @param {string} localization
  * @returns {string} datetime, date, or time input form field as HTML string
  */
-export function createDatetimeField(
-	name: string,
-	inputType: "datetime" | "date" | "time",
-	required: boolean,
-	parsedAttrs: string,
-	params: string,
-	formDelimiter: string,
-	id: string,
-	localization: string,
-): string;
+export function createDatetimeField(name: string, inputType: "datetime" | "date" | "time", required: boolean, parsedAttrs: string, params: string, formDelimiter: string, id: string, localization: string): string;
 /**
  * Create a file form field.
  *
@@ -190,12 +124,4 @@ export function createDatetimeField(
  * @param {string} localization
  * @returns {string} file input form field as HTML string
  */
-export function createFileField(
-	name: string,
-	required: boolean,
-	parsedAttrs: string,
-	params: string,
-	formDelimiter: string,
-	id: string,
-	localization: string,
-): string;
+export function createFileField(name: string, required: boolean, parsedAttrs: string, params: string, formDelimiter: string, id: string, localization: string): string;

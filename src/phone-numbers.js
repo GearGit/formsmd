@@ -1,5 +1,3 @@
-"use strict";
-
 const placeholdersAndCallingCodes = {
 	AC: { placeholder: "40123", callingCode: "+247" },
 	AD: { placeholder: "312 345", callingCode: "+376" },
@@ -318,6 +316,4 @@ function createCountryCallingCodeOptions(
 	return options.join("\n");
 }
 
-exports.placeholdersAndCallingCodes = placeholdersAndCallingCodes;
-exports.getPhoneNumberPlaceholder = getPhoneNumberPlaceholder;
-exports.createCountryCallingCodeOptions = createCountryCallingCodeOptions;
+export { placeholdersAndCallingCodes, getPhoneNumberPlaceholder, createCountryCallingCodeOptions };

@@ -5,11 +5,7 @@
  * Copyright (c) 2024 Tahmid Khan Nafee
  */
 
-"use strict";
+import { translate, Composer } from "./composer.js";
+import { Formsmd } from "./main.js";
 
-const { translate, Composer } = require("./composer");
-const { Formsmd } = require("./main");
-
-exports.translate = translate;
-exports.Composer = Composer;
-exports.Formsmd = Formsmd;
+export { translate, Composer, Formsmd };

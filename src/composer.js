@@ -1,8 +1,6 @@
-"use strict";
-
-const { placeholdersAndCallingCodes } = require("./phone-numbers");
-const { getDefaultSettings } = require("./settings-parse");
-const { translations } = require("./translations");
+import { placeholdersAndCallingCodes } from "./phone-numbers.js";
+import { getDefaultSettings } from "./settings-parse.js";
+import { translations } from "./translations.js";
 
 /**
  * Get the shared form field params.
@@ -1947,7 +1945,4 @@ class Composer {
 	};
 }
 
-exports.composeSharedFieldParams = composeSharedFieldParams;
-exports.composeAttrs = composeAttrs;
-exports.translate = translate;
-exports.Composer = Composer;
+export { composeSharedFieldParams, composeAttrs, translate, Composer };

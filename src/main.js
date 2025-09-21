@@ -5,24 +5,24 @@
  * Copyright (c) 2024 Tahmid Khan Nafee
  */
 
-"use strict";
-
-const { parseDataBlocks } = require("./data-blocks-parse");
-const { isNumeric } = require("./helpers");
-const { renderer } = require("./marked-renderer");
-const { getDefaultSettings, parseSettings } = require("./settings-parse");
-const { parseSpreadsheetData } = require("./spreadsheet-data-parse");
-const {
+import { parseDataBlocks } from "./data-blocks-parse.js";
+import { isNumeric } from "./helpers.js";
+import { renderer } from "./marked-renderer.js";
+import { getDefaultSettings, parseSettings } from "./settings-parse.js";
+import { parseSpreadsheetData } from "./spreadsheet-data-parse.js";
+import {
 	createStyles,
 	madeInLoaderTemplate,
 	createBodyTemplate,
 	createContentTemplate,
-} = require("./templates-create");
-const { getTranslation } = require("./translations");
-const createDOMPurify = require("dompurify");
-const hljs = require("highlight.js/lib/common");
-const { marked } = require("marked");
-var nunjucks = require("nunjucks");
+} from "./templates-create.js";
+import { getTranslation } from "./translations.js";
+import { renderSlideFromDefinition } from "./slides-parse.js";
+import { createWelcomeScreen } from "./welcome-screen-template.js";
+import createDOMPurify from "dompurify";
+import hljs from "highlight.js/lib/common";
+import { marked } from "marked";
+import nunjucks from "nunjucks";
 
 class Formsmd {
 	options = {
@@ -2143,7 +2143,7 @@ class Formsmd {
 
 		try {
 			const response = await fetch(
-				`${apiBaseUrl}/api/public/surveys/${surveyId}`,
+				`${apiBaseUrl}/public/surveys/${surveyId}`,
 				{
 					method: "GET",
 					headers: {
@@ -2190,8 +2190,30 @@ class Formsmd {
 			"http://localhost:3001";
 
 		try {
+			// Use persistent session ID stored in localStorage or generate new one
+			let sessionId = null;
+			try {
+				sessionId = localStorage.getItem(`formsmd_session_${surveyId}`);
+			} catch (e) {
+				// localStorage not available
+			}
+			
+			if (!sessionId) {
+				// Generate unique session ID
+				sessionId = typeof crypto !== 'undefined' && crypto.randomUUID 
+					? crypto.randomUUID() 
+					: `session_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+				
+				// Store in localStorage if available
+				try {
+					localStorage.setItem(`formsmd_session_${surveyId}`, sessionId);
+				} catch (e) {
+					// localStorage not available, continue with generated ID
+				}
+			}
+			
 			const requestBody = {
-				sessionId: "test-session-12345",
+				sessionId: sessionId,
 			};
 
 			// Add current question response if provided
@@ -2203,16 +2225,16 @@ class Formsmd {
 				};
 			}
 
-			const response = await fetch(
-				`${apiBaseUrl}/api/public/surveys/${surveyId}/question`,
-				{
-					method: "POST",
-					headers: {
-						"Content-Type": "application/json",
-					},
-					body: JSON.stringify(requestBody),
+		const response = await fetch(
+			`${apiBaseUrl}/public/surveys/${surveyId}/question`,
+			{
+				method: "POST",
+				headers: {
+					"Content-Type": "application/json",
 				},
-			);
+				body: JSON.stringify(requestBody),
+			},
+		);
 
 			if (!response.ok) {
 				throw new Error(`HTTP error! status: ${response.status}`);
@@ -2228,7 +2250,6 @@ class Formsmd {
 					const slideDefinition =
 						instance.convertAPIQuestionToSlideDefinition(question);
 					const isEndSlide =
-						progress.isLastQuestion ||
 						question.slideType === "end" ||
 						question.type === "end";
 
@@ -2242,7 +2263,7 @@ class Formsmd {
 					return {
 						question: null,
 						slideDefinition: null,
-						isEndSlide: true,
+						isEndSlide: progress?.isLastQuestion || false, // Use progress data to determine if end screen should be shown
 						progress: progress,
 					};
 				}
@@ -2506,11 +2527,15 @@ class Formsmd {
 			questionId = formField.getAttribute("data-fmd-name");
 		}
 
+		console.log(`🔍 DEBUG: Processing questionId: ${questionId}`);
+
 		// Get question type and configuration
 		const questionType =
 			originalQuestion?.type ||
 			this.getQuestionTypeFromDOM(activeSlide, questionId);
 		const questionConfig = originalQuestion?.options || {};
+
+		console.log(`🔍 DEBUG: Question type: ${questionType}`);
 
 		// Extract value based on question type
 		let value = this.extractValueByQuestionType(
@@ -2520,6 +2545,8 @@ class Formsmd {
 			questionConfig,
 		);
 
+		console.log(`🔍 DEBUG: Extracted value: ${JSON.stringify(value)}`);
+
 		// Calculate time spent (simple implementation)
 		const timeSpent = Math.floor(Math.random() * 30) + 5; // Random time for demo
 
@@ -2528,6 +2555,8 @@ class Formsmd {
 			value: value,
 			timeSpent: timeSpent,
 		};
+		
+		console.log(`🔍 DEBUG: Final form data: ${JSON.stringify(formData)}`);
 		return formData;
 	};
 
@@ -2557,9 +2586,21 @@ class Formsmd {
 		}
 
 		// Look for individual input elements
-		const input = activeSlide.querySelector(`input[name="${questionId}"]`);
+		let input = activeSlide.querySelector(`input[name="${questionId}"]`);
+		
+		// If not found, try with data-fmd-name attribute
+		if (!input) {
+			input = activeSlide.querySelector(`input[data-fmd-name="${questionId}"]`);
+		}
+		
+		// If still not found, try to find any input in the slide
+		if (!input) {
+			input = activeSlide.querySelector('input');
+		}
+		
 		if (input) {
 			const inputType = input.getAttribute("type");
+			console.log(`🔍 DEBUG: Found input with type: ${inputType} for questionId: ${questionId}`);
 			if (
 				inputType === "text" ||
 				inputType === "email" ||
@@ -2583,20 +2624,31 @@ class Formsmd {
 		}
 
 		// Look for textarea
-		const textarea = activeSlide.querySelector(
-			`textarea[name="${questionId}"]`,
-		);
+		let textarea = activeSlide.querySelector(`textarea[name="${questionId}"]`);
+		if (!textarea) {
+			textarea = activeSlide.querySelector(`textarea[data-fmd-name="${questionId}"]`);
+		}
+		if (!textarea) {
+			textarea = activeSlide.querySelector('textarea');
+		}
 		if (textarea) {
 			return "text_input";
 		}
 
 		// Look for select
-		const select = activeSlide.querySelector(`select[name="${questionId}"]`);
+		let select = activeSlide.querySelector(`select[name="${questionId}"]`);
+		if (!select) {
+			select = activeSlide.querySelector(`select[data-fmd-name="${questionId}"]`);
+		}
+		if (!select) {
+			select = activeSlide.querySelector('select');
+		}
 		if (select) {
 			return "choice_input";
 		}
 
 		// Default fallback
+		console.log(`🔍 DEBUG: No input found, defaulting to text_input for questionId: ${questionId}`);
 		return "text_input";
 	};
 
@@ -2689,17 +2741,31 @@ class Formsmd {
 	 * @returns {string} Extracted value
 	 */
 	extractTextInputValue = (activeSlide, questionId) => {
-		const input = activeSlide.querySelector(`input[name="${questionId}"]`);
-		const textarea = activeSlide.querySelector(
-			`textarea[name="${questionId}"]`,
-		);
+		// Try multiple selectors to find the input field
+		let input = activeSlide.querySelector(`input[name="${questionId}"]`);
+		let textarea = activeSlide.querySelector(`textarea[name="${questionId}"]`);
+		
+		// If not found, try with data-fmd-name attribute
+		if (!input && !textarea) {
+			input = activeSlide.querySelector(`input[data-fmd-name="${questionId}"]`);
+			textarea = activeSlide.querySelector(`textarea[data-fmd-name="${questionId}"]`);
+		}
+		
+		// If still not found, try to find any input/textarea in the slide
+		if (!input && !textarea) {
+			input = activeSlide.querySelector('input[type="text"], input[type="email"], input[type="url"], input[type="tel"]');
+			textarea = activeSlide.querySelector('textarea');
+		}
 
 		if (input) {
+			console.log(`🔍 DEBUG: Found input value: "${input.value}" for questionId: ${questionId}`);
 			return input.value || "";
 		} else if (textarea) {
+			console.log(`🔍 DEBUG: Found textarea value: "${textarea.value}" for questionId: ${questionId}`);
 			return textarea.value || "";
 		}
 
+		console.log(`🔍 DEBUG: No input/textarea found for questionId: ${questionId}`);
 		return "";
 	};
 
@@ -2711,11 +2777,26 @@ class Formsmd {
 	 * @returns {number|null} Extracted value
 	 */
 	extractNumberInputValue = (activeSlide, questionId) => {
-		const input = activeSlide.querySelector(`input[name="${questionId}"]`);
+		// Try multiple selectors to find the number input field
+		let input = activeSlide.querySelector(`input[name="${questionId}"]`);
+		
+		// If not found, try with data-fmd-name attribute
+		if (!input) {
+			input = activeSlide.querySelector(`input[data-fmd-name="${questionId}"]`);
+		}
+		
+		// If still not found, try to find any number input in the slide
+		if (!input) {
+			input = activeSlide.querySelector('input[type="number"]');
+		}
+
 		if (input && input.value) {
+			console.log(`🔍 DEBUG: Found number input value: "${input.value}" for questionId: ${questionId}`);
 			const numValue = parseFloat(input.value);
 			return isNaN(numValue) ? null : numValue;
 		}
+		
+		console.log(`🔍 DEBUG: No number input found for questionId: ${questionId}`);
 		return null;
 	};
 
@@ -2854,22 +2935,28 @@ class Formsmd {
 			};
 		}
 
-		// Map API question types to FormsMD field types
-		let fieldType = "text_input";
+		// Map API question types to FormsMD field types (FormsMD expects lowercase, no underscores)
+		let fieldType = "textinput";
 		if (question.type === "choice_input") {
-			fieldType = "choice_input";
+			fieldType = "choiceinput";
 		} else if (question.type === "number_input") {
-			fieldType = "number_input";
+			fieldType = "numberinput";
 		} else if (question.type === "rating_input") {
-			fieldType = "rating_input";
+			fieldType = "ratinginput";
 		} else if (question.type === "datetime_input") {
-			fieldType = "datetime_input";
+			fieldType = "datetimeinput";
 		} else if (question.type === "file_input") {
-			fieldType = "file_input";
+			fieldType = "fileinput";
 		} else if (question.type === "opinion_scale") {
-			fieldType = "opinion_scale";
+			fieldType = "opinionscale";
 		} else if (question.type === "country_calling_code") {
 			fieldType = "country_calling_code";
+		} else if (question.type === "email_input") {
+			fieldType = "emailinput";
+		} else if (question.type === "url_input") {
+			fieldType = "urlinput";
+		} else if (question.type === "tel_input") {
+			fieldType = "telinput";
 		}
 
 		// Build the slide definition
@@ -2913,49 +3000,22 @@ class Formsmd {
 	 * @param {boolean} isEndSlide
 	 * @returns {HTMLElement} the created slide element
 	 */
-	createNextSlide = (slideDefinition, isEndSlide) => {
+	createNextSlide = (slideDefinition, isEndSlide, isLastQuestion = false) => {
 		const instance = this;
 
 		// Debug logging
 
-		// Import required functions
-		const { renderSlideFromDefinition } = require("./slides-parse");
-		const { createContentTemplate } = require("./templates-create");
+		// Import required functions (now using static imports)
+		// const { renderSlideFromDefinition } = require("./slides-parse");
+		// const { createContentTemplate } = require("./templates-create");
 
 		let slideHtml;
 
 		if (isEndSlide) {
-			// Handle end slide - use the end slide template
-			const { getTranslation } = require("./translations");
-
-			// Create default end slide if no definition provided
-			if (!slideDefinition) {
-				const endSlideTemplate = `
-				<div class="fmd-slide fmd-end-slide">
-					<div class="fmd-grid">
-						<div class="fmd-text-center">
-							<h1 class="fmd-h2 fmd-mb-2">${getTranslation(instance.state.settings.localization, "form-submitted-title")}</h1>
-							<p class="fmd-fs-lead fmd-mb-1">${getTranslation(instance.state.settings.localization, "form-submitted-subtitle")}</p>
-						</div>
-					</div>
-				</div>`;
-				slideHtml = endSlideTemplate;
-			} else {
-				// Render the end slide definition
-				slideHtml = renderSlideFromDefinition(
-					slideDefinition,
-					instance.state.settings.page === "form-slides" ? true : false,
-					false, // isFirstSlide
-					{
-						showRestartBtn:
-							instance.state.settings["restart-button"] === "show"
-								? true
-								: false,
-						submitBtnText: instance.state.settings["submit-button-text"] || "",
-					},
-					instance.state.settings.localization,
-				);
-			}
+			// Handle end slide - this should not happen in createNextSlide
+			// End slides should be handled by createQuestionLifecycle
+			console.warn("createNextSlide called with isEndSlide=true, this should not happen");
+			slideHtml = '<div class="fmd-slide fmd-end-slide"><div class="fmd-grid"><div class="fmd-text-center"><h1>End Slide</h1></div></div></div>';
 		} else {
 			// Render regular slide
 			slideHtml = renderSlideFromDefinition(
@@ -2968,6 +3028,7 @@ class Formsmd {
 					submitBtnText: instance.state.settings["submit-button-text"] || "",
 				},
 				instance.state.settings.localization,
+				isLastQuestion, // isLastQuestion
 			);
 		}
 
@@ -3017,6 +3078,7 @@ class Formsmd {
 		slideDefinition,
 		isEndSlide = false,
 		slideType = "question",
+		isLastQuestion = false,
 	) => {
 		const instance = this;
 
@@ -3047,7 +3109,7 @@ class Formsmd {
 			slideElement = instance.createContentSlide(endHtml);
 		} else {
 			// Create regular question slide (DOM element only, no insertion)
-			slideElement = instance.createNextSlide(slideDefinition, isEndSlide);
+			slideElement = instance.createNextSlide(slideDefinition, isEndSlide, isLastQuestion);
 
 			// ✅ ADD BACK: DOM insertion and cleanup logic here
 			// Insert the slide into the DOM
@@ -3355,8 +3417,8 @@ class Formsmd {
 	renderWelcomeSlide = (question, config) => {
 		const instance = this;
 
-		// Import the welcome screen template
-		const { createWelcomeScreen } = require("./welcome-screen-template");
+		// Import the welcome screen template (now using static imports)
+		// const { createWelcomeScreen } = require("./welcome-screen-template");
 
 		// Create welcome screen HTML using the template
 		return createWelcomeScreen(config, instance.state.settings.localization);
@@ -3367,8 +3429,8 @@ class Formsmd {
 	 */
 	renderEndSlide = (question, config) => {
 		const instance = this;
-		const { getTranslation } = require("./translations");
-		var nunjucks = require("nunjucks");
+		// const { getTranslation } = require("./translations");
+		// var nunjucks = require("nunjucks");
 
 		// Extract settings from question data
 		const title = question?.question || question?.title;
@@ -3905,30 +3967,87 @@ class Formsmd {
 			);
 		}
 
+		// Check if we've already submitted this response to prevent duplicate submissions
+		if (currentFormData && instance.state.currentQuestion) {
+			const questionId = instance.state.currentQuestion.questionId;
+			const existingResponse = instance.state.lifecycle.userResponses.get(questionId);
+			if (existingResponse && existingResponse.submitted) {
+				console.log(`🔍 Response already submitted for question ${questionId}, skipping API call`);
+				return; // Skip API call if already submitted
+			}
+		}
+
 		// Get the next question from API
 		instance
 			.getNextQuestionFromAPI(currentFormData)
 			.then((nextSlideData) => {
+				// Mark response as submitted after successful API call
+				if (currentFormData && instance.state.currentQuestion) {
+					const questionId = instance.state.currentQuestion.questionId;
+					const response = instance.state.lifecycle.userResponses.get(questionId);
+					if (response) {
+						response.submitted = true;
+						instance.state.lifecycle.userResponses.set(questionId, response);
+					}
+				}
 				// Check if we have a next slide definition
 				if (!nextSlideData.slideDefinition) {
-					// No more slides available
-					instance.addSlideError(activeSlide, ctaBtn, []);
+					// Survey completed - check if we should show an end slide
+					if (nextSlideData.isEndSlide) {
+						// Create end slide for survey completion
+						const endSlideData = {
+							type: "end",
+							title: "Survey Completed",
+							content: "Thank you for completing the survey!",
+							buttonText: "Restart Survey"
+						};
+						
+						const endSlide = instance.createQuestionLifecycle(
+							endSlideData,
+							null, // No slide definition for end slide
+							true, // isEndSlide
+							"end"
+						);
+						
+						// Handle the end slide directly without calling handleNextSlideSuccess
+						// to avoid duplicate processing
+						instance.fadeInNextSlide(activeSlide, endSlide);
+						
+						// Handle the new active slide after transition completes
+						setTimeout(() => {
+							instance.hasNewActiveSlide(
+								endSlide,
+								nextSlideData.progress?.currentQuestion || 1,
+								false,
+							);
+						}, instance.getSlideTransitionDuration() * 3);
+						
+						// Call completion function
+						setTimeout(() => {
+							instance.onCompletion({ success: true });
+						}, instance.getSlideTransitionDuration() * 3);
+						
+						return;
+					} else {
+						// Survey completed but no end screen configured - just call completion
+						instance.onCompletion({ success: true });
+						
+						// Remove all buttons from their processing states
+						instance.container
+							.querySelectorAll(".fmd-btn-processing")
+							.forEach((btn) => {
+								instance.removeBtnProcessing(btn);
+							});
 
-					// Remove all buttons from their processing states
-					instance.container
-						.querySelectorAll(".fmd-btn-processing")
-						.forEach((btn) => {
-							instance.removeBtnProcessing(btn);
-						});
-
-					// Enable all clicks on root element
-					rootElem.removeEventListener(
-						"click",
-						instance.disableAllClicks,
-						true,
-					);
-
-					return;
+						// Enable all clicks on root element
+						rootElem.removeEventListener(
+							"click",
+							instance.disableAllClicks,
+							true,
+						);
+						
+						return;
+					}
 				}
 
 				// Detect slide type from API response
@@ -3960,6 +4079,7 @@ class Formsmd {
 					nextSlideData.slideDefinition,
 					nextSlideData.isEndSlide,
 					slideType,
+					nextSlideData.progress?.isLastQuestion || false,
 				);
 
 				// Update the current question data in state
@@ -4005,7 +4125,40 @@ class Formsmd {
 		const instance = this;
 		const rootElem = instance.container.querySelector(".fmd-root");
 
-		// POST form data
+		// Skip postFormData in API-driven mode since we already handled the API call
+		if (instance.options.isApiDriven) {
+			// If next slide is the end slide: remove response id, remove form
+			// data from local storage, and redirect (if applicable)
+			if (nextSlideData.isEndSlide) {
+				instance.removeResponseId();
+				instance.removeSavedFormData();
+				const redirect = nextSlide.getAttribute("data-fmd-redirect");
+				if (redirect) {
+					window.location.href = redirect;
+					return;
+				}
+			}
+
+			// Fade in next slide
+			instance.fadeInNextSlide(activeSlide, nextSlide);
+
+			// Handle the new active slide
+			instance.hasNewActiveSlide(
+				nextSlide,
+				nextSlideData.progress?.currentQuestion || 1,
+				false,
+			);
+
+			// Call the on completion function if end slide
+			if (nextSlideData.isEndSlide) {
+				setTimeout(function () {
+					instance.onCompletion({ success: true });
+				}, instance.getSlideTransitionDuration() * 3);
+			}
+			return;
+		}
+
+		// Traditional mode - POST form data
 		const postCondition =
 			instance.state.settings.page === "form-slides" &&
 			(activeSlide.hasAttribute("data-fmd-post") || nextSlideData.isEndSlide)
@@ -4438,7 +4591,7 @@ class Formsmd {
 		if (instance.options.isApiDriven && instance.options.surveyId) {
 			instance.initializeWithApiConfig({
 				surveyId: instance.options.surveyId,
-				apiBaseUrl: instance.options.apiBaseUrl || "http://localhost:3001",
+				apiBaseUrl: instance.options.apiBaseUrl || "http://localhost:3000",
 			});
 			return; // Skip traditional initialization for API-driven mode
 		} else {
@@ -4854,9 +5007,9 @@ function hexToRgb(hex) {
  */
 async function fetchSurveyData(surveyId, apiBaseUrl) {
 	try {
-		const response = await fetch(
-			`${apiBaseUrl}/api/public/surveys/${surveyId}`,
-		);
+	const response = await fetch(
+		`${apiBaseUrl}/public/surveys/${surveyId}`,
+	);
 
 		if (!response.ok) {
 			throw new Error(`HTTP error! status: ${response.status}`);
@@ -4884,8 +5037,30 @@ async function fetchSurveyData(surveyId, apiBaseUrl) {
  */
 async function fetchNextQuestion(surveyId, apiBaseUrl, currentResponse = null) {
 	try {
+		// Use persistent session ID stored in localStorage or generate new one
+		let sessionId = null;
+		try {
+			sessionId = localStorage.getItem(`formsmd_session_${surveyId}`);
+		} catch (e) {
+			// localStorage not available
+		}
+		
+		if (!sessionId) {
+			// Generate unique session ID
+			sessionId = typeof crypto !== 'undefined' && crypto.randomUUID 
+				? crypto.randomUUID() 
+				: `session_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+			
+			// Store in localStorage if available
+			try {
+				localStorage.setItem(`formsmd_session_${surveyId}`, sessionId);
+			} catch (e) {
+				// localStorage not available, continue with generated ID
+			}
+		}
+			
 		const requestBody = {
-			sessionId: "test-session",
+			sessionId: sessionId,
 		};
 
 		// Add current question response if provided
@@ -4898,7 +5073,7 @@ async function fetchNextQuestion(surveyId, apiBaseUrl, currentResponse = null) {
 		}
 
 		const response = await fetch(
-			`${apiBaseUrl}/api/public/surveys/${surveyId}/question`,
+			`${apiBaseUrl}/public/surveys/${surveyId}/question`,
 			{
 				method: "POST",
 				headers: {
@@ -4919,7 +5094,7 @@ async function fetchNextQuestion(surveyId, apiBaseUrl, currentResponse = null) {
 
 			if (status === "question" && question) {
 				const slideDefinition = convertAPIQuestionToSlideDefinition(question);
-				const isEndSlide = progress.isLastQuestion;
+				const isEndSlide = false; // Only true for actual end slides, not last questions
 
 				return {
 					question: question,
@@ -4931,7 +5106,7 @@ async function fetchNextQuestion(surveyId, apiBaseUrl, currentResponse = null) {
 				return {
 					question: null,
 					slideDefinition: null,
-					isEndSlide: true,
+					isEndSlide: progress?.isLastQuestion || false, // Use progress data to determine if end screen should be shown
 					progress: progress,
 				};
 			}
@@ -4950,19 +5125,21 @@ async function fetchNextQuestion(surveyId, apiBaseUrl, currentResponse = null) {
  * @returns {string} slide definition in markdown format
  */
 function convertAPIQuestionToSlideDefinition(question) {
-	// Map API question types to FormsMD field types
+	// Map API question types to FormsMD field types (FormsMD expects lowercase, no underscores)
 	const fieldTypeMap = {
-		text_input: "TextInput",
-		email_input: "EmailInput",
-		number_input: "NumberInput",
-		choice_input: "ChoiceInput",
-		rating_input: "RatingInput",
-		opinion_scale: "OpinionScale",
-		datetime_input: "DateTimeInput",
-		file_input: "FileInput",
+		text_input: "textinput",
+		email_input: "emailinput",
+		number_input: "numberinput",
+		choice_input: "choiceinput",
+		rating_input: "ratinginput",
+		opinion_scale: "opinionscale",
+		datetime_input: "datetimeinput",
+		file_input: "fileinput",
+		url_input: "urlinput",
+		tel_input: "telinput",
 	};
 
-	const fieldType = fieldTypeMap[question.type] || "TextInput";
+	const fieldType = fieldTypeMap[question.type] || "textinput";
 
 	// Build the slide definition
 	let slideDefinition = `\n`;
@@ -4998,4 +5175,4 @@ function convertAPIQuestionToSlideDefinition(question) {
 	return slideDefinition;
 }
 
-exports.Formsmd = Formsmd;
+export { Formsmd };

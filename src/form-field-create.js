@@ -1,13 +1,10 @@
-"use strict";
-
-const { addReservedClass } = require("./attrs-parse");
-const { isNumeric, unescape } = require("./helpers");
-const {
-	getPhoneNumberPlaceholder,
+import { addReservedClass  } from "./attrs-parse.js";
+import { isNumeric, unescape  } from "./helpers.js";
+import { getPhoneNumberPlaceholder,
 	createCountryCallingCodeOptions,
-} = require("./phone-numbers");
-const { getTranslation } = require("./translations");
-var nunjucks = require("nunjucks");
+ } from "./phone-numbers.js";
+import { getTranslation  } from "./translations.js";
+import nunjucks from "nunjucks";
 
 const formFieldPattern = new RegExp(
 	/\s*([a-zA-Z_$][a-zA-Z0-9_$]*)\s*(\*)?\s*=\s*(textinput|emailinput|urlinput|telinput|passwordinput|numberinput|selectbox|choiceinput|picturechoice|ratinginput|opinionscale|datetimeinput|dateinput|timeinput|fileinput)\((.*)\)/,
@@ -1344,13 +1341,4 @@ function createFileField(
 	});
 }
 
-exports.formFieldPattern = formFieldPattern;
-exports.formFieldSetup = formFieldSetup;
-exports.createTextField = createTextField;
-exports.createNumberField = createNumberField;
-exports.createSelectField = createSelectField;
-exports.createChoiceField = createChoiceField;
-exports.createRatingField = createRatingField;
-exports.createOpinionScaleField = createOpinionScaleField;
-exports.createDatetimeField = createDatetimeField;
-exports.createFileField = createFileField;
+export { formFieldPattern, formFieldSetup, createTextField, createNumberField, createSelectField, createChoiceField, createRatingField, createOpinionScaleField, createDatetimeField, createFileField };

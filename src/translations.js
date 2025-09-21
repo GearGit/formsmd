@@ -1,5 +1,3 @@
-"use strict";
-
 const translations = {
 	en: {
 		"choice-field-required": "Please select an item in the list.",
@@ -473,5 +471,4 @@ function getTranslation(localization, key) {
 	return translations[localization][key] || "";
 }
 
-exports.translations = translations;
-exports.getTranslation = getTranslation;
+export { translations, getTranslation };

@@ -1,17 +1,14 @@
-"use strict";
-
-const { addReservedClass } = require("./attrs-parse");
-const { parseDivs, parseBindSpans } = require("./div-span-parse");
-const { renderer } = require("./marked-renderer");
-const {
-	parseSlides,
+import { addReservedClass  } from "./attrs-parse.js";
+import { parseDivs, parseBindSpans  } from "./div-span-parse.js";
+import { renderer  } from "./marked-renderer.js";
+import { parseSlides,
 	parseSlidesLazy,
 	renderSlideFromDefinition,
-} = require("./slides-parse");
-const { getTranslation } = require("./translations");
-const createDOMPurify = require("dompurify");
-const { marked } = require("marked");
-var nunjucks = require("nunjucks");
+ } from "./slides-parse.js";
+import { getTranslation  } from "./translations.js";
+import createDOMPurify from "dompurify";
+import { marked  } from "marked";
+import nunjucks from "nunjucks";
 
 /**
  * Create the CSS styles using the settings.
@@ -605,7 +602,4 @@ function createContentTemplate(template, settings, data, windowAndSanitize) {
 	};
 }
 
-exports.createStyles = createStyles;
-exports.madeInLoaderTemplate = madeInLoaderTemplate;
-exports.createBodyTemplate = createBodyTemplate;
-exports.createContentTemplate = createContentTemplate;
+export { createStyles, madeInLoaderTemplate, createBodyTemplate, createContentTemplate };

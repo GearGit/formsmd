@@ -22,6 +22,6 @@ export function getDefaultSettings(): any;
  * settings
  */
 export function parseSettings(template: string): {
-	template: string;
-	settings: any;
+    template: string;
+    settings: any;
 };

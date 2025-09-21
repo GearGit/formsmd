@@ -8,12 +8,9 @@
  * @returns {{template: string, bindDivTemplates: Object}} template with
  * parsed <div> elements, bind <div> templates
  */
-export function parseDivs(
-	template: string,
-	cssPrefix: string,
-): {
-	template: string;
-	bindDivTemplates: any;
+export function parseDivs(template: string, cssPrefix: string): {
+    template: string;
+    bindDivTemplates: any;
 };
 /**
  * Given a template string, parse the bind <span> elements, and return the

@@ -1,9 +1,7 @@
-"use strict";
-
-const { formFieldPattern } = require("./form-field-create");
-const { unescape } = require("./helpers");
-const { getTranslation } = require("./translations");
-var nunjucks = require("nunjucks");
+import { formFieldPattern  } from "./form-field-create.js";
+import { unescape  } from "./helpers.js";
+import { getTranslation  } from "./translations.js";
+import nunjucks from "nunjucks";
 
 const slideTemplate = `
 {% if isForm and isFormSlide %}
@@ -28,6 +26,7 @@ const slideTemplate = `
 		</div>
 		{% else %}
 		<div class="fmd-next-controls fmd-d-flex{% if buttonAlignment %} fmd-justify-content-{{ buttonAlignment }}{% endif %}">
+			{% if isLastQuestion %}
 			<button type="submit" class="fmd-submit-btn fmd-btn fmd-btn-accent fmd-d-flex fmd-align-items-center fmd-justify-content-center">
 				{% if btnSettings.submitBtnText != "" %}
 				{{ btnSettings.submitBtnText }}
@@ -36,6 +35,13 @@ const slideTemplate = `
 				<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512" class="fmd-icon fmd-ms-2" aria-hidden="true" focusable="false"><path d="M441 103c9.4 9.4 9.4 24.6 0 33.9L177 401c-9.4 9.4-24.6 9.4-33.9 0L7 265c-9.4-9.4-9.4-24.6 0-33.9s24.6-9.4 33.9 0l119 119L407 103c9.4-9.4 24.6-9.4 33.9 0z"/></svg>
 				{% endif %}
 			</button>
+			{% else %}
+			<button type="submit" class="fmd-next-btn fmd-btn fmd-btn-accent fmd-d-flex fmd-align-items-center fmd-justify-content-center">
+				{{ translations.nextBtn }}
+				<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512" class="fmd-icon fmd-ms-2 fmd-hide-rtl" aria-hidden="true" focusable="false"><path d="M273 239c9.4 9.4 9.4 24.6 0 33.9L113 433c-9.4 9.4-24.6 9.4-33.9 0s-9.4-24.6 0-33.9l143-143L79 113c-9.4-9.4-9.4-24.6 0-33.9s24.6-9.4 33.9 0L273 239z"/></svg>
+				<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512" class="fmd-icon fmd-ms-2 fmd-hide-ltr" aria-hidden="true" focusable="false"><path d="M47 239c-9.4 9.4-9.4 24.6 0 33.9L207 433c9.4 9.4 24.6 9.4 33.9 0s9.4-24.6 0-33.9L97.9 256 241 113c9.4-9.4 9.4-24.6 0-33.9s24.6-9.4 33.9 0L47 239z"/></svg>
+			</button>
+			{% endif %}
 		</div>
 		{% endif %}
 	</div>
@@ -109,7 +115,7 @@ const endSlideTemplate = `
  * @returns {{template: string, slideType:"start"|"body"|"end"}} template with
  * parsed slides, type of the slide
  */
-function parseSlide(template, isForm, isFirstSlide, btnSettings, localization) {
+function parseSlide(template, isForm, isFirstSlide, btnSettings, localization, isLastQuestion = false) {
 	const content = [];
 	let isFormSlide = false;
 	let jump = "";
@@ -231,6 +237,7 @@ function parseSlide(template, isForm, isFirstSlide, btnSettings, localization) {
 			disablePrevBtn: disablePrevBtn,
 			post: post,
 			startBtn: startBtn,
+			isLastQuestion: isLastQuestion,
 			translations: {
 				formSubmitBtn: getTranslation(localization, "form-submit-btn"),
 				nextBtn: getTranslation(localization, "next-btn"),
@@ -251,6 +258,7 @@ function parseSlide(template, isForm, isFirstSlide, btnSettings, localization) {
 			disablePrevBtn: disablePrevBtn,
 			post: post,
 			startBtn: "",
+			isLastQuestion: isLastQuestion,
 			translations: {
 				formSubmitBtn: getTranslation(localization, "form-submit-btn"),
 				nextBtn: getTranslation(localization, "next-btn"),
@@ -445,6 +453,7 @@ function renderSlideFromDefinition(
 	isFirstSlide,
 	btnSettings,
 	localization,
+	isLastQuestion = false,
 ) {
 	const parsedSlide = parseSlide(
 		slideDefinition,
@@ -452,11 +461,9 @@ function renderSlideFromDefinition(
 		isFirstSlide,
 		btnSettings,
 		localization,
+		isLastQuestion,
 	);
 	return parsedSlide.template;
 }
 
-exports.parseSlide = parseSlide;
-exports.parseSlides = parseSlides;
-exports.parseSlidesLazy = parseSlidesLazy;
-exports.renderSlideFromDefinition = renderSlideFromDefinition;
+export { parseSlide, parseSlides, parseSlidesLazy, renderSlideFromDefinition };

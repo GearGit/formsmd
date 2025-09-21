@@ -9,12 +9,9 @@
  * @param {string} localization - Localization setting
  * @returns {string} Welcome screen HTML
  */
-export function createWelcomeScreen(
-	config: {
-		title: string;
-		content: string;
-		buttonText: string;
-		alignment: string;
-	},
-	localization: string,
-): string;
+export function createWelcomeScreen(config: {
+    title: string;
+    content: string;
+    buttonText: string;
+    alignment: string;
+}, localization: string): string;

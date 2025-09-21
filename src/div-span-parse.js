@@ -1,6 +1,4 @@
-"use strict";
-
-const { parseElemAttrs, addReservedClass } = require("./attrs-parse");
+import { parseElemAttrs, addReservedClass  } from "./attrs-parse.js";
 
 /**
  * Given a template string, parse the <div> elements, and return the template.
@@ -98,5 +96,4 @@ function parseBindSpans(template) {
 	);
 }
 
-exports.parseDivs = parseDivs;
-exports.parseBindSpans = parseBindSpans;
+export { parseDivs, parseBindSpans };

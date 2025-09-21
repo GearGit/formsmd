@@ -1,6 +1,4 @@
-"use strict";
-
-const { isNumeric } = require("./helpers");
+import { isNumeric  } from "./helpers.js";
 
 /**
  * Given a row string, split it by the given delimiter (unless the delimiter
@@ -100,4 +98,4 @@ function parseSpreadsheetData(data, delimiter) {
 	};
 }
 
-exports.parseSpreadsheetData = parseSpreadsheetData;
+export { parseSpreadsheetData };

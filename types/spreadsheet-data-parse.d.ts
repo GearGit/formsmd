@@ -5,10 +5,7 @@
  * @param {string} delimiter
  * @returns {{dataSpreadsheet: Object, dataNormalized: Object[]}}
  */
-export function parseSpreadsheetData(
-	data: string,
-	delimiter: string,
-): {
-	dataSpreadsheet: any;
-	dataNormalized: any[];
+export function parseSpreadsheetData(data: string, delimiter: string): {
+    dataSpreadsheet: any;
+    dataNormalized: any[];
 };

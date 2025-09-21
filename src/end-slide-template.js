@@ -1,7 +1,5 @@
-"use strict";
-
-const { getTranslation } = require("./translations");
-var nunjucks = require("nunjucks");
+import { getTranslation  } from "./translations.js";
+import nunjucks from "nunjucks";
 
 /**
  * End slide template with alignment options
@@ -110,6 +108,5 @@ function createEndSlide(config, localization) {
 	});
 }
 
-module.exports = {
-	createEndSlide,
-};
+export { createEndSlide,
+ };

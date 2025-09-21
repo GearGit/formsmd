@@ -1,6 +1,4 @@
-"use strict";
-
-const { unescape } = require("./helpers");
+import { unescape  } from "./helpers.js";
 
 /**
  * Parse color from a string and return the RGB values, supported types: name,
@@ -591,6 +589,4 @@ function parseSettings(template) {
 	};
 }
 
-exports.parseColor = parseColor;
-exports.getDefaultSettings = getDefaultSettings;
-exports.parseSettings = parseSettings;
+export { parseColor, getDefaultSettings, parseSettings };
